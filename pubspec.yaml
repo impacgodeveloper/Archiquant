@@ -1,0 +1,28 @@
+name: archiquant_flutter
+description: Building Construction Suite
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  go_router: ^14.6.2
+  fl_chart: ^0.69.0
+  lucide_icons_flutter: ^3.1.13
+  http: ^1.6.0
+  image_picker: ^1.1.2
+  file_picker: ^8.0.0
+  shared_preferences: ^2.2.0
+  url_launcher: ^6.2.5
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
