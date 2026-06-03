@@ -1212,7 +1212,7 @@ class _BricksTab extends StatelessWidget {
                         letterSpacing: 1.2)),
                 const SizedBox(height: 6),
                 const Text(
-                  'Bricks = (L × H ÷ Brick face area) × Thickness multiplier × 1.10',
+                  'Bricks = Net brickwork volume (m³) × 500 bricks/m³ × 1.10',
                   style: TextStyle(
                       color: Colors.white,
                       fontSize: 13,
@@ -1220,10 +1220,10 @@ class _BricksTab extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Wrap(spacing: 8, runSpacing: 6, children: const [
-                  _Chip('4" → ×1.0'),
-                  _Chip('6" → ×1.5'),
-                  _Chip('8" → ×2.0'),
-                  _Chip('9" → ×2.25'),
+                  _Chip('Volume = L × B × H'),
+                  _Chip('500 bricks / m³'),
+                  _Chip('− openings (by volume)'),
+                  _Chip('9" → Red · 4/6/8" → White'),
                   _Chip('+10% buffer'),
                 ]),
                 const SizedBox(height: 8),
@@ -1462,7 +1462,7 @@ class _BricksTab extends StatelessWidget {
             Expanded(flex: 3,
                 child: Text('Wall', style: _hStyle)),
             Expanded(child: Text('L×H sqft', style: _hStyle)),
-            Expanded(child: Text('Multiplier', style: _hStyle)),
+            Expanded(child: Text('Vol m³', style: _hStyle)),
             Expanded(child: Text('Nos', style: _hStyle)),
             Expanded(child: Text('Gross', style: _hStyle)),
             Expanded(child: Text('+10%', style: _hStyle)),
@@ -1495,7 +1495,7 @@ class _BricksTab extends StatelessWidget {
                 style: const TextStyle(
                     fontSize: 12, color: AppTheme.slate600))),
             Expanded(child: Text(
-                '×${w['multiplier'] ?? 1}',
+                '${w['wall_volume_cum'] ?? 0}',
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
