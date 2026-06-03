@@ -416,6 +416,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
 
     const BRICK_FACE_SQFT     = parseFloat(eval(fMap["brick_face_area"] || "0.75 * 0.25"));
     const BUFFER_PCT          = parseFloat(fMap["buffer_percentage"] || "10");
+    const BRICKS_PER_M3       = parseFloat(fMap["bricks_per_m3"] || "500");  // BOQ master constant
     const redBrickThicknesses = (fMap["red_brick_thickness"] || "9").split(",").map(Number);
 
     const { data: compSettings } = await supabase
@@ -502,8 +503,9 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
         const wallFaceSqft    = L * H;
         const wallVolumeCuFt  = L * B * H * nos;
         const wallVolumeCuM   = wallVolumeCuFt * 0.0283168;
-        const bricksPerFace   = wallFaceSqft / BRICK_FACE_SQFT;
-        const bricksRaw       = bricksPerFace * multiplier * nos;
+        // BOQ method: bricks = brickwork VOLUME (m³) × bricks-per-m³
+        const bricksPerFace   = wallFaceSqft / BRICK_FACE_SQFT;   // kept for reference only
+        const bricksRaw       = wallVolumeCuM * BRICKS_PER_M3;
         const bricksWithBuffer = Math.ceil(bricksRaw * (1 + BUFFER_PCT / 100));
         const brickType = redBrickThicknesses.includes(thick) ? "red_brick" : "white_cement";
 
@@ -532,23 +534,55 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
       ...calcWallBricks(intWalls),
     ];
 
-    const calcOpeningDeduction = (openingList) => {
-      let totalDedBricks = 0;
-      const items = [];
-      for (const o of openingList) {
-        const nos       = o.count || 1;
-        const L         = o.size_ft?.width  || 0;
-        const H         = o.size_ft?.height || 0;
-        const faceSqft  = L * H * nos;
-        const dedBricks = Math.ceil(faceSqft / BRICK_FACE_SQFT);
-        totalDedBricks += dedBricks;
-        items.push({ description: `${L}×${H}ft`, nos, face_sqft: parseFloat(faceSqft.toFixed(2)), bricks_deducted: dedBricks });
+    // Wall-thickness lookup (id → inches) so each opening is deducted using
+    // the thickness of the wall it sits on — exactly like the BOQ sheet.
+    const wallThk = {};
+    [ocr.internal_walls, ocr.external_walls].forEach((m) => {
+      if (m && !Array.isArray(m)) {
+        Object.values(m).forEach((w) => { wallThk[w.id] = w.thickness_in; });
       }
-      return { items, total_bricks: totalDedBricks };
+    });
+
+    // Build openings with per-opening wall thickness (new format has on_wall);
+    // old grouped format falls back to a 9" wall.
+    const buildOpenings = (rawMap, grouped) => {
+      if (rawMap && !Array.isArray(rawMap) && Object.keys(rawMap).length) {
+        return Object.values(rawMap).map((o) => ({
+          L: o.width_ft || 0, H: o.height_ft || 0, nos: 1,
+          thick: wallThk[o.on_wall] || 9,
+        }));
+      }
+      return (grouped || []).map((o) => ({
+        L: o.size_ft?.width || 0, H: o.size_ft?.height || 0, nos: o.count || 1, thick: 9,
+      }));
     };
 
-    const windowDed = calcOpeningDeduction(ocrWindows);
-    const doorDed   = calcOpeningDeduction(ocrDoors);
+    const doorOpenings   = buildOpenings(ocr.doors,   ocrDoors);
+    const windowOpenings = buildOpenings(ocr.windows, ocrWindows);
+
+    // Deduct openings by VOLUME (L × B × H), B = the wall's thickness → ×500/m³
+    const calcOpeningDeduction = (openings) => {
+      let totalDedBricks = 0, totalVolCuFt = 0;
+      const items = [];
+      for (const o of openings) {
+        const B         = thicknessInFeet(o.thick);
+        const volCuFt   = o.L * B * o.H * o.nos;
+        const volCuM    = volCuFt * 0.0283168;
+        const dedBricks = Math.ceil(volCuM * BRICKS_PER_M3);
+        totalDedBricks += dedBricks;
+        totalVolCuFt   += volCuFt;
+        items.push({
+          description: `${o.L}×${o.H}ft (${o.thick}")`, nos: o.nos,
+          face_sqft: parseFloat((o.L * o.H * o.nos).toFixed(2)),
+          volume_cuft: parseFloat(volCuFt.toFixed(3)),
+          bricks_deducted: dedBricks,
+        });
+      }
+      return { items, total_bricks: totalDedBricks, volume_cuft: parseFloat(totalVolCuFt.toFixed(3)) };
+    };
+
+    const windowDed = calcOpeningDeduction(windowOpenings);
+    const doorDed   = calcOpeningDeduction(doorOpenings);
     const totalDed  = windowDed.total_bricks + doorDed.total_bricks;
 
     const grossBricks = allBreakdown.reduce((s, w) => s + w.bricks_raw, 0);
@@ -569,12 +603,9 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
     const whiteFinal = Math.ceil(whiteNet * (1 + BUFFER_PCT / 100));
 
     const totalGrossVolumeCuFt = allBreakdown.reduce((s, w) => s + w.wall_volume_cuft, 0);
-    const totalDedVolumeCuFt   = [...ocrWindows, ...ocrDoors].reduce((s, o) => {
-      const nos = o.count || 1;
-      const L   = o.size_ft?.width  || 0;
-      const H   = o.size_ft?.height || 0;
-      return s + (L * 0.625 * H * nos);
-    }, 0);
+    // Use the SAME opening volumes as the brick deduction (per-opening wall
+    // thickness) so brick, cement and sand all derive from one net volume.
+    const totalDedVolumeCuFt = (windowDed.volume_cuft || 0) + (doorDed.volume_cuft || 0);
     const netVolumeCuFt = Math.max(0, totalGrossVolumeCuFt - totalDedVolumeCuFt);
     const netVolumeCuM  = parseFloat((netVolumeCuFt * 0.0283168).toFixed(4));
 

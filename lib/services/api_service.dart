@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ApiService {
-  static const String baseUrl = "http://localhost:3000";
+  static const String baseUrl = "https://archiquant.in";
 
   // ═══════════════════════════════════════════════════════
   // TOKEN HELPERS
