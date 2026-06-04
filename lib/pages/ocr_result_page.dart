@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/ocr_store.dart';
+import '../services/api_service.dart';
 import 'upload_plan.dart' show AppTheme, WallItem, OpeningItem, PointItem, SimpleItem, FloorPlanPainter;
 
 // ─── RESULTS PAGE (room editor) ─────────────────────────────────────────────────
@@ -189,6 +191,65 @@ class _OcrResultPageState extends State<OcrResultPage> {
       }
     }
     return 'Common';
+  }
+
+  // Serialise the full editor state for the backend (JSON blob + rows)
+  Map<String, dynamic> _componentsJson() {
+    Map<String, dynamic> dim(dynamic c) => {
+          'component': c.component, 'l': c.l, 'h': c.h, 'w': c.w,
+          'material': c.material, 'room': c.room,
+          if (c is WallItem) 'position': c.position,
+        };
+    Map<String, dynamic> pt(PointItem c) =>
+        {'component': c.component, 'type': c.type, 'room': c.room};
+    return {
+      'walls':      _walls.map(dim).toList(),
+      'doors':      _doorItems.map(dim).toList(),
+      'windows':    _windowItems.map(dim).toList(),
+      'ceiling':    _ceiling.map(dim).toList(),
+      'flooring':   _flooring.map(dim).toList(),
+      'finishes':   _finishes.map(dim).toList(),
+      'furniture':  _furniture.map(dim).toList(),
+      'others':     _others.map(dim).toList(),
+      'electrical': _electrical.map(pt).toList(),
+      'plumbing':   _plumbing.map(pt).toList(),
+    };
+  }
+
+  Future<void> _saveRoom() async {
+    setState(() => _isSaving = true);
+    try {
+      final prefs     = await SharedPreferences.getInstance();
+      final projectId = prefs.getString('current_project_id') ?? '';
+      if (projectId.isEmpty) throw Exception('No project selected');
+
+      final res = await ApiService.saveRoomComponents(projectId, _componentsJson());
+      if (res['success'] != true) throw Exception(res['error'] ?? 'Save failed');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Room saved — ${res['saved'] ?? 0} components persisted '
+              '(${_walls.length} walls • ${_doorItems.length} doors • ${_windowItems.length} windows)',
+              style: const TextStyle(fontSize: 13, color: Colors.white)),
+          backgroundColor: const Color(0xFF10B981),
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Save failed: $e',
+              style: const TextStyle(fontSize: 13, color: Colors.white)),
+          backgroundColor: const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   @override
@@ -670,21 +731,7 @@ class _OcrResultPageState extends State<OcrResultPage> {
           _actionBtn(LucideIcons.plus,      '+ Add Other',      () => _showAddDialog('Others')),
           _actionBtn(LucideIcons.trash2,    'Clear All', _confirmClearAll, color: const Color(0xFFEF4444)),
           ElevatedButton.icon(
-            onPressed: _isSaving ? null : () async {
-              setState(() => _isSaving = true);
-              await Future.delayed(const Duration(milliseconds: 300));
-              if (mounted) {
-                setState(() => _isSaving = false);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text('Room saved — ${_walls.length} walls • ${_doorItems.length} doors • ${_windowItems.length} windows',
-                      style: const TextStyle(fontSize: 13, color: Colors.white)),
-                  backgroundColor: const Color(0xFF10B981),
-                  duration: const Duration(seconds: 2),
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ));
-              }
-            },
+            onPressed: _isSaving ? null : _saveRoom,
             icon: _isSaving
                 ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(LucideIcons.save, size: 14),

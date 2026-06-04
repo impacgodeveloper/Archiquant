@@ -167,6 +167,22 @@ class ApiService {
   }
 
   // ═══════════════════════════════════════════════════════
+  // SAVE ROOM COMPONENTS (edited results page)
+  // ═══════════════════════════════════════════════════════
+
+  static Future<Map<String, dynamic>> saveRoomComponents(
+    String projectId,
+    Map<String, dynamic> components,
+  ) async {
+    final res = await http.put(
+      Uri.parse('$baseUrl/projects/$projectId/components'),
+      headers: await _headers,
+      body: jsonEncode({'components': components}),
+    );
+    return jsonDecode(res.body);
+  }
+
+  // ═══════════════════════════════════════════════════════
   // BRICK CALCULATION
   // ═══════════════════════════════════════════════════════
 
