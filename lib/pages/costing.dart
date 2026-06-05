@@ -1271,10 +1271,11 @@ class _BricksTab extends StatelessWidget {
         );
 
     Widget row(List<Widget> cells, int i) => Container(
-          color: i.isEven ? Colors.white : AppTheme.slate50,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-          decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: AppTheme.slate100))),
+          decoration: BoxDecoration(
+              color: i.isEven ? Colors.white : AppTheme.slate50,
+              border: const Border(
+                  bottom: BorderSide(color: AppTheme.slate100))),
           child: Row(children: cells),
         );
 
