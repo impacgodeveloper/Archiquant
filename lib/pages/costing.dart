@@ -716,7 +716,7 @@
 //               mainAxisAlignment:
 //                   MainAxisAlignment.spaceBetween,
 //               children: [
-//                 const Text('FINAL  (Net + 10%)',
+//                 const Text('FINAL  (Net + buffer)',
 //                     style: TextStyle(
 //                         color: Colors.white,
 //                         fontWeight: FontWeight.bold,
@@ -1186,6 +1186,10 @@ class _BricksTab extends StatelessWidget {
     final red      = data['red_brick']    ?? {};
     final white    = data['white_cement'] ?? {};
     final deds     = data['deductions']   ?? {};
+    final buffer   = (data['buffer_pct'] ??
+        (data['formulas_used'] is Map ? data['formulas_used']['buffer_pct'] : null) ??
+        5).toString();
+    final mult     = (1 + (double.tryParse(buffer) ?? 5) / 100).toStringAsFixed(2);
     final rawZones = data['zone_summary'];
     // Handle both List and Map responses from different backend versions
     final zones = rawZones is Map
@@ -1215,20 +1219,20 @@ class _BricksTab extends StatelessWidget {
                         fontSize: 11,
                         letterSpacing: 1.2)),
                 const SizedBox(height: 6),
-                const Text(
-                  'Bricks = Net brickwork volume (m³) × 500 bricks/m³ × 1.10',
-                  style: TextStyle(
+                Text(
+                  'Bricks = Net brickwork volume (m³) × 500 bricks/m³ × $mult',
+                  style: const TextStyle(
                       color: Colors.white,
                       fontSize: 13,
                       fontWeight: FontWeight.w500),
                 ),
                 const SizedBox(height: 8),
-                Wrap(spacing: 8, runSpacing: 6, children: const [
-                  _Chip('Volume = L × B × H'),
-                  _Chip('500 bricks / m³'),
-                  _Chip('− openings (by volume)'),
-                  _Chip('9" → Red · 4/6/8" → White'),
-                  _Chip('+10% buffer'),
+                Wrap(spacing: 8, runSpacing: 6, children: [
+                  const _Chip('Volume = L × B × H'),
+                  const _Chip('500 bricks / m³'),
+                  const _Chip('− openings (by volume)'),
+                  const _Chip('9" → Red · 4/6/8" → White'),
+                  _Chip('+$buffer% buffer'),
                 ]),
                 const SizedBox(height: 8),
                 Text(grand['formula'] ?? '',
@@ -1302,7 +1306,7 @@ class _BricksTab extends StatelessWidget {
           // Stats
           Row(children: [
             _statCard('Total Bricks', '${grand['final_bricks'] ?? 0}',
-                'incl. 10% buffer', AppTheme.slate900,
+                'incl. $buffer% buffer', AppTheme.slate900,
                 const Color(0xFFF1F5F9)),
             const SizedBox(width: 12),
             _statCard('Red Bricks', '${red['final_with_10pct'] ?? 0}',
@@ -1469,7 +1473,7 @@ class _BricksTab extends StatelessWidget {
             Expanded(child: Text('Vol m³', style: _hStyle)),
             Expanded(child: Text('Nos', style: _hStyle)),
             Expanded(child: Text('Gross', style: _hStyle)),
-            Expanded(child: Text('+10%', style: _hStyle)),
+            Expanded(child: Text('Final', style: _hStyle)),
           ]),
         ),
         ...walls.map((w) => Container(
@@ -1535,7 +1539,7 @@ class _BricksTab extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('FINAL  (Net + 10%)',
+              const Text('FINAL  (Net + buffer)',
                   style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,

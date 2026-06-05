@@ -82,6 +82,64 @@ function normalizeOCR(ocr) {
   return { zones, internal, external, doors, windows };
 }
 
+// ── Merge user edits (Save Room) into the OCR object ─────────────────────────
+// When a plan has edited_components, the user's edited walls/doors/windows
+// become the source of truth for costing/takeoff. We keep the original zones
+// (zone sizes aren't edited in the UI) and override walls + openings from the
+// edits. Returns an OCR-shaped object the existing calc logic understands.
+function applyEdits(rawOcr, edited) {
+  if (!edited || typeof edited !== "object") return rawOcr;
+  const ocr = { ...(rawOcr || {}) };
+
+  const internal_walls = {}, external_walls = {}, doors = {}, windows = {};
+  let iw = 0, ew = 0, dn = 0, wn = 0;
+
+  (edited.walls || []).forEach((x) => {
+    const comp = String(x.component || "").toLowerCase();
+    const thick = Number(x.w) || 0;
+    const isExt = comp.startsWith("ew") || (!comp.startsWith("iw") && thick >= 9);
+    // Guard against implausibly thin saved thickness (e.g. 1") which would
+    // mis-classify a 9" brick wall. A real wall is >= 3"; otherwise use the
+    // standard default for its type (external 9", internal 4").
+    const safeThick = thick >= 3 ? thick : (isExt ? 9 : 4);
+    const base = {
+      height_ft: Number(x.h) || 10,
+      length_ft: Number(x.l) || 0,
+      thickness_in: safeThick,
+      position: x.position || "unknown",
+    };
+    if (isExt) {
+      ew += 1;
+      external_walls[`ew${ew}`] = { id: `ew${ew}`, ...base,
+        connected: { doors: [], windows: [], internal_walls: [] } };
+    } else {
+      iw += 1;
+      internal_walls[`iw${iw}`] = { id: `iw${iw}`, ...base,
+        connected: { doors: [], windows: [] }, connects_external: [] };
+    }
+  });
+
+  (edited.doors || []).forEach((x) => {
+    dn += 1;
+    doors[`d${dn}`] = { id: `d${dn}`, width_ft: Number(x.l) || 3,
+      height_ft: Number(x.h) || 7, on_wall: null };
+  });
+  (edited.windows || []).forEach((x) => {
+    wn += 1;
+    windows[`w${wn}`] = { id: `w${wn}`, width_ft: Number(x.l) || 4,
+      height_ft: Number(x.h) || 4, on_wall: null };
+  });
+
+  // Only override if the user actually has edited walls/openings
+  if (Object.keys(internal_walls).length || Object.keys(external_walls).length) {
+    ocr.internal_walls = internal_walls;
+    ocr.external_walls = external_walls;
+  }
+  if (Object.keys(doors).length)   ocr.doors   = doors;
+  if (Object.keys(windows).length) ocr.windows = windows;
+  return ocr;
+}
+
 if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 
 const storage = multer.diskStorage({
@@ -186,7 +244,7 @@ app.post("/auth/register", async (req, res) => {
 
     await supabase.from("formula_definitions").insert([
       { company_id: company.id, name: "brick_face_area",            expression: "0.75 * 0.25", description: "Standard brick face area in sqft (9×3 inch)",       variables: [], output_unit: "sqft",       is_system_default: true, active: true },
-      { company_id: company.id, name: "buffer_percentage",          expression: "10",          description: "Extra buffer percentage for all materials",           variables: [], output_unit: "percentage", is_system_default: true, active: true },
+      { company_id: company.id, name: "buffer_percentage",          expression: "5",           description: "Wastage buffer percentage for all materials (matches BOQ)", variables: [], output_unit: "percentage", is_system_default: true, active: true },
       { company_id: company.id, name: "red_brick_thickness",        expression: "9",           description: "Walls with this thickness (inches) use Red Brick",    variables: [], output_unit: "inches",     is_system_default: true, active: true },
       { company_id: company.id, name: "white_cement_thickness",     expression: "4,6",         description: "Walls with these thicknesses use White Cement Block",  variables: [], output_unit: "inches",     is_system_default: true, active: true },
       { company_id: company.id, name: "thickness_multiplier_4inch", expression: "1.0",         description: "4 inch wall thickness multiplier",                    variables: [], output_unit: "multiplier", is_system_default: true, active: true },
@@ -389,6 +447,85 @@ app.post(
 );
 
 // ═══════════════════════════════════════════════════════════
+// SAVE ROOM COMPONENTS (edited on the results page)
+//   - stores the full edited room as JSON (floor_plans.edited_components)
+//   - AND replaces normalized rows in structural_elements
+// ═══════════════════════════════════════════════════════════
+app.put("/projects/:project_id/components", authMiddleware, async (req, res) => {
+  const { company_id } = req.user;
+  const { project_id } = req.params;
+  const components = (req.body && req.body.components) || {};
+  await withCompany(company_id);
+
+  try {
+    // latest done floor plan for this project
+    const { data: plans } = await supabase
+      .from("floor_plans").select("id")
+      .eq("project_id", project_id).eq("company_id", company_id)
+      .eq("ocr_status", "done")
+      .order("created_at", { ascending: false }).limit(1);
+
+    if (!plans?.length) {
+      return res.status(404).json({ error: "No floor plan found. Upload a plan first." });
+    }
+    const planId = plans[0].id;
+
+    // 1) JSON blob — exact editor state for fast reload
+    await supabase.from("floor_plans")
+      .update({ edited_components: components })
+      .eq("id", planId).eq("company_id", company_id);
+
+    // 2) Normalized rows — wipe & rebuild for this plan
+    await supabase.from("structural_elements")
+      .delete().eq("floor_plan_id", planId).eq("company_id", company_id);
+
+    const FT = 0.3048, IN = 0.0254;
+    const rows = [];
+
+    const addDim = (type, list) => (list || []).forEach((c) => {
+      rows.push({
+        company_id, floor_plan_id: planId, element_type: type,
+        length_m:    c.l != null ? parseFloat((c.l * FT).toFixed(4)) : null,
+        height_m:    c.h != null ? parseFloat((c.h * FT).toFixed(4)) : null,
+        thickness_m: c.w != null ? parseFloat((c.w * IN).toFixed(4)) : null,
+        metadata: {
+          component: c.component ?? null, material: c.material ?? null,
+          position: c.position ?? null, room: c.room ?? null,
+          l_ft: c.l ?? null, h_ft: c.h ?? null, w_in: c.w ?? null,
+        },
+      });
+    });
+    const addPoint = (type, list) => (list || []).forEach((c) => {
+      rows.push({
+        company_id, floor_plan_id: planId, element_type: type,
+        metadata: { component: c.component ?? null, type: c.type ?? null, room: c.room ?? null },
+      });
+    });
+
+    addDim("wall",      components.walls);
+    addDim("door",      components.doors);
+    addDim("window",    components.windows);
+    addDim("ceiling",   components.ceiling);
+    addDim("flooring",  components.flooring);
+    addDim("finish",    components.finishes);
+    addDim("furniture", components.furniture);
+    addDim("other",     components.others);
+    addPoint("electrical", components.electrical);
+    addPoint("plumbing",   components.plumbing);
+
+    if (rows.length) {
+      const { error: insErr } = await supabase.from("structural_elements").insert(rows);
+      if (insErr) return res.status(500).json({ success: false, error: insErr.message });
+    }
+
+    res.json({ success: true, floor_plan_id: planId, saved: rows.length });
+  } catch (err) {
+    console.error("Save components error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
 // BRICK CALCULATION
 // ═══════════════════════════════════════════════════════════
 
@@ -399,7 +536,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
 
   try {
     const { data: plans } = await supabase
-      .from("floor_plans").select("id, raw_ocr_data")
+      .from("floor_plans").select("id, raw_ocr_data, edited_components")
       .eq("project_id", project_id).eq("company_id", company_id)
       .eq("ocr_status", "done").order("created_at", { ascending: false }).limit(1);
 
@@ -415,7 +552,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
     (formulas || []).forEach((f) => { fMap[f.name] = f.expression; });
 
     const BRICK_FACE_SQFT     = parseFloat(eval(fMap["brick_face_area"] || "0.75 * 0.25"));
-    const BUFFER_PCT          = parseFloat(fMap["buffer_percentage"] || "10");
+    const BUFFER_PCT          = parseFloat(fMap["buffer_percentage"] || "5");
     const BRICKS_PER_M3       = parseFloat(fMap["bricks_per_m3"] || "500");  // BOQ master constant
     const redBrickThicknesses = (fMap["red_brick_thickness"] || "9").split(",").map(Number);
 
@@ -445,7 +582,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
       return inch / 12;
     };
 
-    const ocr     = plans[0].raw_ocr_data;
+    const ocr     = applyEdits(plans[0].raw_ocr_data, plans[0].edited_components);
     const summary = ocr.summary || {};
     const { zones, internal, external, doors: ocrDoors, windows: ocrWindows } = normalizeOCR(ocr);
 
@@ -806,7 +943,7 @@ app.post("/formulas/seed", authMiddleware, async (req, res) => {
 
     const { data, error } = await supabase.from("formula_definitions").insert([
       { company_id, name: "brick_face_area",            expression: "0.75 * 0.25", description: "Standard brick face area in sqft (9×3 inch)",       variables: [], output_unit: "sqft",       is_system_default: true, active: true },
-      { company_id, name: "buffer_percentage",          expression: "10",          description: "Extra buffer percentage for all materials",           variables: [], output_unit: "percentage", is_system_default: true, active: true },
+      { company_id, name: "buffer_percentage",          expression: "5",           description: "Wastage buffer percentage for all materials (matches BOQ)", variables: [], output_unit: "percentage", is_system_default: true, active: true },
       { company_id, name: "red_brick_thickness",        expression: "9",           description: "Walls with this thickness (inches) use Red Brick",    variables: [], output_unit: "inches",     is_system_default: true, active: true },
       { company_id, name: "white_cement_thickness",     expression: "4,6",         description: "Walls with these thicknesses use White Cement Block",  variables: [], output_unit: "inches",     is_system_default: true, active: true },
       { company_id, name: "thickness_multiplier_4inch", expression: "1.0",         description: "4 inch wall thickness multiplier",                    variables: [], output_unit: "multiplier", is_system_default: true, active: true },
@@ -1163,7 +1300,7 @@ app.get("/projects/:project_id/takeoff", authMiddleware, async (req, res) => {
 
   try {
     const { data: plans } = await supabase
-      .from("floor_plans").select("id, raw_ocr_data, created_at")
+      .from("floor_plans").select("id, raw_ocr_data, edited_components, created_at")
       .eq("project_id", project_id).eq("company_id", company_id)
       .eq("ocr_status", "done").order("created_at", { ascending: false }).limit(1);
 
@@ -1177,7 +1314,7 @@ app.get("/projects/:project_id/takeoff", authMiddleware, async (req, res) => {
       .order("created_at", { ascending: false }).limit(1);
 
     const snap    = estimations?.[0]?.formula_snapshot || {};
-    const ocr     = plans[0].raw_ocr_data;
+    const ocr     = applyEdits(plans[0].raw_ocr_data, plans[0].edited_components);
     const summary = ocr.summary || {};
     const { zones, internal, external, doors: ocrDoors, windows: ocrWindows } = normalizeOCR(ocr);
 
@@ -1551,57 +1688,136 @@ app.get("/projects/:project_id/export/excel", authMiddleware, async (req, res) =
     boqSheet.getCell(`A${boqSheet.rowCount}`).value = `Total Amount: Rs. ${(totalCost / 100000).toFixed(2)} Lakhs`;
     boqSheet.getCell(`A${boqSheet.rowCount}`).font  = { italic: true, color: { argb: 'FF64748B' }, size: 9 };
 
-    const brickSheet = wb.addWorksheet('Brick Calculation');
+    // ── BRICK WORK CALCULATION sheet — mirrors the client's BOQ Excel layout:
+    //    Table 1 = Gross wall volume, Table 2 = Window/Opening deductions,
+    //    Table 3 = Door deductions, then Net volume → bricks (×500/m³ + buffer).
+    const brickSheet = wb.addWorksheet('Brick Work Calculation');
     brickSheet.columns = [
-      { key: 'desc', width: 25 }, { key: 'type', width: 12 }, { key: 'nos', width: 8 },
-      { key: 'L', width: 10 }, { key: 'B', width: 10 }, { key: 'H', width: 10 },
-      { key: 'volCuft', width: 14 }, { key: 'volCuM', width: 14 }, { key: 'bricks', width: 14 },
+      { key: 'desc', width: 28 }, { key: 'nos', width: 8 },
+      { key: 'L', width: 11 }, { key: 'B', width: 11 }, { key: 'H', width: 11 },
+      { key: 'volCuft', width: 15 }, { key: 'volCuM', width: 15 },
     ];
-    brickSheet.mergeCells('A1:I1');
-    brickSheet.getCell('A1').value = 'Brick Work Quantity Calculation';
-    brickSheet.getCell('A1').font  = { bold: true, size: 14, color: { argb: 'FFDC2626' } };
+    const FT3_TO_M3 = 0.0283168;
+    const bufferPct = snap?.buffer_pct ?? snap?.formulas_used?.buffer_pct ?? 10;
+
+    brickSheet.mergeCells('A1:G1');
+    brickSheet.getCell('A1').value = 'BRICK WORK CALCULATION';
+    brickSheet.getCell('A1').font  = { bold: true, size: 15, color: { argb: 'FFDC2626' } };
     brickSheet.getCell('A1').alignment = { horizontal: 'center' };
     brickSheet.getRow(1).height = 28;
     brickSheet.addRow([]);
 
-    const brickHeader = brickSheet.addRow(['Description', 'Type', 'Nos', 'L (ft)', 'B (ft)', 'H (ft)', 'Vol (Cu.Ft)', 'Vol (m³)', '+10% Bricks']);
-    brickHeader.height = 20;
-    brickHeader.eachCell(cell => {
+    // Helper: section banner spanning A:G
+    const sectionBanner = (title, argb) => {
+      const r = brickSheet.addRow([title]);
+      brickSheet.mergeCells(`A${r.number}:G${r.number}`);
+      r.height = 22;
+      r.getCell(1).fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+      r.getCell(1).font      = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+      r.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+    };
+    // Helper: column header row
+    const tableHeader = (cells, argb) => {
+      const r = brickSheet.addRow(cells);
+      r.height = 18;
+      r.eachCell(cell => {
+        cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+        cell.font      = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+      return r;
+    };
+    // Helper: data row with zebra + borders
+    const dataRow = (cells, idx, tint) => {
+      const r = brickSheet.addRow(cells);
+      r.height = 16;
+      r.eachCell((cell, col) => {
+        cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: idx % 2 === 0 ? 'FFFFFFFF' : tint } };
+        cell.font      = { size: 9 };
+        cell.alignment = { horizontal: col === 1 ? 'left' : 'center' };
+        cell.border    = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
+      });
+      return r;
+    };
+    // Helper: subtotal row
+    const subtotalRow = (label, cuft, argb) => {
+      const r = brickSheet.addRow([label, '', '', '', '', (cuft || 0).toFixed(3), ((cuft || 0) * FT3_TO_M3).toFixed(4)]);
+      r.height = 18;
+      r.eachCell(cell => {
+        cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+        cell.font      = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
+        cell.alignment = { horizontal: 'center' };
+      });
+      r.getCell(1).alignment = { horizontal: 'left', indent: 1 };
+      return r;
+    };
+
+    // ── TABLE 1 — GROSS WALL VOLUME ──────────────────────────────
+    sectionBanner('TABLE 1 — GROSS WALL VOLUME', 'FF0F172A');
+    tableHeader(['Description', 'Nos', 'L (ft)', 'B (ft)', 'H (ft)', 'Vol (Cu.Ft)', 'Vol (m³)'], 'FF334155');
+    const walls = snap?.wall_breakdown || [];
+    walls.forEach((w, idx) => {
+      const volCuft = w.wall_volume_cuft ?? ((w.L || 0) * (w.thickness_ft || 0) * (w.H || 0) * (w.nos || 1));
+      dataRow([
+        w.description || '', w.nos || 1,
+        (w.L || 0).toFixed(2), (w.thickness_ft || 0).toFixed(3), (w.H || 0).toFixed(2),
+        volCuft.toFixed(3), (w.wall_volume_cum ?? volCuft * FT3_TO_M3).toFixed(4),
+      ], idx, 'FFF8FAFC');
+    });
+    const grossCuft = snap?.volume_summary?.gross_volume_cuft || 0;
+    subtotalRow('GROSS TOTAL', grossCuft, 'FF0F172A');
+    brickSheet.addRow([]);
+
+    // ── TABLE 2 — DEDUCTIONS: WINDOWS / OPENINGS ─────────────────
+    sectionBanner('TABLE 2 — DEDUCTIONS (Windows / Vents / Openings)', 'FFB45309');
+    tableHeader(['Opening (L×H, thk)', 'Nos', 'Face (Sq.Ft)', '', '', 'Vol (Cu.Ft)', 'Vol (m³)'], 'FFD97706');
+    const winItems = snap?.deductions?.windows?.items || [];
+    winItems.forEach((o, idx) => {
+      dataRow([
+        o.description || '', o.nos || 1, (o.face_sqft || 0).toFixed(2), '', '',
+        (o.volume_cuft || 0).toFixed(3), ((o.volume_cuft || 0) * FT3_TO_M3).toFixed(4),
+      ], idx, 'FFFFFBEB');
+    });
+    const winCuft = snap?.deductions?.windows?.volume_cuft || 0;
+    subtotalRow('WINDOW / OPENING DEDUCTION', winCuft, 'FFB45309');
+    brickSheet.addRow([]);
+
+    // ── TABLE 3 — DEDUCTIONS: DOORS ──────────────────────────────
+    sectionBanner('TABLE 3 — DEDUCTIONS (Doors)', 'FF7C2D12');
+    tableHeader(['Door (L×H, thk)', 'Nos', 'Face (Sq.Ft)', '', '', 'Vol (Cu.Ft)', 'Vol (m³)'], 'FF9A3412');
+    const doorItems = snap?.deductions?.doors?.items || [];
+    doorItems.forEach((o, idx) => {
+      dataRow([
+        o.description || '', o.nos || 1, (o.face_sqft || 0).toFixed(2), '', '',
+        (o.volume_cuft || 0).toFixed(3), ((o.volume_cuft || 0) * FT3_TO_M3).toFixed(4),
+      ], idx, 'FFFEF2F2');
+    });
+    const doorCuft = snap?.deductions?.doors?.volume_cuft || 0;
+    subtotalRow('DOOR DEDUCTION', doorCuft, 'FF7C2D12');
+    brickSheet.addRow([]);
+
+    // ── NET VOLUME + BRICK COUNT ─────────────────────────────────
+    const netCuft = snap?.volume_summary?.net_volume_cuft ?? Math.max(0, grossCuft - winCuft - doorCuft);
+    const netCuM  = snap?.volume_summary?.net_volume_cum  ?? parseFloat((netCuft * FT3_TO_M3).toFixed(4));
+    subtotalRow(`NET VOLUME  =  Gross − Windows − Doors`, netCuft, 'FF065F46');
+
+    const eqRow = brickSheet.addRow([`Bricks = ${netCuM.toFixed(4)} m³ × 500 + ${bufferPct}% wastage`, '', '', '', '', '', snap?.grand_total?.final_bricks || 0]);
+    eqRow.height = 20;
+    eqRow.eachCell(cell => {
       cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDC2626' } };
       cell.font      = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
     });
+    brickSheet.mergeCells(`A${eqRow.number}:F${eqRow.number}`);
+    eqRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
 
-    [...(snap?.red_brick?.walls || []), ...(snap?.white_cement?.walls || [])].forEach((w, idx) => {
-      const volCuft = (w.L || 0) * (w.thickness_ft || w.B || 0) * (w.H || 0) * (w.nos || 1);
-      const row = brickSheet.addRow([
-        w.description || '', w.brick_type || w.type || '', w.nos || 1,
-        (w.L || 0).toFixed(2), w.thickness_ft || w.B || 0, w.H || 0,
-        (w.wall_volume_cuft || volCuft).toFixed(3),
-        (w.wall_volume_cum  || volCuft * 0.0283168).toFixed(4),
-        w.bricks_with_10pct || 0,
-      ]);
-      row.height = 16;
-      row.eachCell(cell => {
-        cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: idx % 2 === 0 ? 'FFFFFFFF' : 'FFFFF5F5' } };
-        cell.font      = { size: 9 };
-        cell.alignment = { horizontal: 'center' };
-        cell.border    = { bottom: { style: 'thin', color: { argb: 'FFFFE2E2' } } };
-      });
-      brickSheet.getCell(`A${row.number}`).alignment = { horizontal: 'left' };
-    });
-
-    const brickTotalRow = brickSheet.addRow(['TOTAL', '', '', '', '', '',
-      (snap?.volume_summary?.gross_volume_cuft || 0).toFixed(3),
-      (snap?.volume_summary?.net_volume_cum    || 0).toFixed(4),
-      snap?.grand_total?.final_bricks || 0,
-    ]);
-    brickTotalRow.height = 20;
-    brickTotalRow.eachCell(cell => {
-      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDC2626' } };
-      cell.font      = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
-      cell.alignment = { horizontal: 'center' };
-    });
+    // Red vs White split
+    brickSheet.addRow([]);
+    const splitHdr = tableHeader(['Brick Type', 'Gross', 'Deducted', 'Net', `+${bufferPct}% Final`, '', ''], 'FFDC2626');
+    [
+      ['Red Brick (9")', snap?.red_brick?.gross_bricks, snap?.red_brick?.deducted, snap?.red_brick?.net_bricks, snap?.red_brick?.final_with_10pct],
+      ['White Cement Block (4"/6")', snap?.white_cement?.gross_bricks, snap?.white_cement?.deducted, snap?.white_cement?.net_bricks, snap?.white_cement?.final_with_10pct],
+    ].forEach((r, idx) => dataRow([r[0], r[1] || 0, r[2] || 0, r[3] || 0, r[4] || 0, '', ''], idx, 'FFFFF5F5'));
 
     const csSheet = wb.addWorksheet('Cement & Sand');
     csSheet.columns = [
