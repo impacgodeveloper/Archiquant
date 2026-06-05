@@ -981,6 +981,55 @@ class _CostingState extends State<Costing>
     }
   }
 
+  Future<void> _exportReport() async {
+    final prefs     = await SharedPreferences.getInstance();
+    final projectId = prefs.getString('current_project_id') ?? '';
+    if (!mounted) return;
+
+    if (projectId.isEmpty || _calcData == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Calculate a project first, then export.'),
+        backgroundColor: Color(0xFFDC2626),
+      ));
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Export Report',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+            ListTile(
+              leading: const Icon(LucideIcons.fileSpreadsheet, color: Color(0xFF15803D)),
+              title: const Text('Excel (.xlsx)'),
+              subtitle: const Text('BOQ + Brick Work Calculation (matches your Excel)'),
+              onTap: () {
+                Navigator.pop(ctx);
+                ApiService.exportExcel(projectId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(LucideIcons.fileText, color: Color(0xFFDC2626)),
+              title: const Text('PDF Report'),
+              subtitle: const Text('Printable summary'),
+              onTap: () {
+                Navigator.pop(ctx);
+                ApiService.exportPDF(projectId);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -1018,7 +1067,7 @@ class _CostingState extends State<Costing>
               ),
               const SizedBox(width: 8),
               ElevatedButton.icon(
-                onPressed: () {},
+                onPressed: _exportReport,
                 icon: const Icon(LucideIcons.download, size: 16),
                 label: const Text('Export Report'),
                 style: ElevatedButton.styleFrom(
