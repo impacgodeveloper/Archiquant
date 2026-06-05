@@ -11,27 +11,32 @@ class AppLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.pageBg,
-      body: Row(
-        children: [
-          const _Sidebar(),
-          Expanded(
-            child: Column(
-              children: [
-                const _TopBar(),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: child,
+    return LayoutBuilder(builder: (context, constraints) {
+      final wide = constraints.maxWidth >= 900;
+      return Scaffold(
+        backgroundColor: AppColors.pageBg,
+        // On narrow screens the sidebar becomes a slide-out drawer
+        drawer: wide ? null : const Drawer(width: 220, child: _Sidebar()),
+        body: Row(
+          children: [
+            if (wide) const _Sidebar(),
+            Expanded(
+              child: Column(
+                children: [
+                  _TopBar(compact: !wide),
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.all(wide ? 24 : 12),
+                      child: child,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -201,7 +206,12 @@ class _NavItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: InkWell(
-        onTap: () => context.go(route),
+        onTap: () {
+          context.go(route);
+          // if we're inside the slide-out drawer (narrow screens), close it
+          final sc = Scaffold.maybeOf(context);
+          if (sc?.isDrawerOpen ?? false) sc!.closeDrawer();
+        },
         borderRadius: BorderRadius.circular(10),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
@@ -259,7 +269,8 @@ class _NavItem extends StatelessWidget {
 
 // ─── Top Bar ──────────────────────────────────────────────────
 class _TopBar extends StatelessWidget {
-  const _TopBar();
+  final bool compact;
+  const _TopBar({this.compact = false});
 
   @override
   Widget build(BuildContext context) {
@@ -269,7 +280,7 @@ class _TopBar extends StatelessWidget {
 
     return Container(
       height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 24),
       decoration: const BoxDecoration(
         color: Colors.white,
         boxShadow: [
@@ -282,6 +293,16 @@ class _TopBar extends StatelessWidget {
       ),
       child: Row(children: [
 
+        // Hamburger (only on narrow screens → opens the drawer)
+        if (compact)
+          Builder(
+            builder: (ctx) => IconButton(
+              icon: const Icon(LucideIcons.menu, color: Color(0xFF1A2332)),
+              onPressed: () => Scaffold.of(ctx).openDrawer(),
+              tooltip: 'Menu',
+            ),
+          ),
+
         // Page icon + title
         Container(
           width: 34, height: 34,
@@ -293,33 +314,38 @@ class _TopBar extends StatelessWidget {
               color: const Color(0xFF1E6FD9)),
         ),
         const SizedBox(width: 12),
-        Text(title,
-            style: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF1A2332))),
+        Flexible(
+          child: Text(title,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1A2332))),
+        ),
 
         const Spacer(),
 
-        // Search
-        Container(
-          width: 240, height: 38,
-          decoration: BoxDecoration(
-            color: const Color(0xFFEEF2F7),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFD0DAE8)),
+        // Search — hidden on narrow screens to save space
+        if (!compact) ...[
+          Container(
+            width: 240, height: 38,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEEF2F7),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFD0DAE8)),
+            ),
+            child: const Row(children: [
+              SizedBox(width: 12),
+              Icon(LucideIcons.search,
+                  size: 15, color: Color(0xFF9BAAB8)),
+              SizedBox(width: 8),
+              Text('Search...',
+                  style: TextStyle(
+                      color: Color(0xFF9BAAB8), fontSize: 13)),
+            ]),
           ),
-          child: const Row(children: [
-            SizedBox(width: 12),
-            Icon(LucideIcons.search,
-                size: 15, color: Color(0xFF9BAAB8)),
-            SizedBox(width: 8),
-            Text('Search...',
-                style: TextStyle(
-                    color: Color(0xFF9BAAB8), fontSize: 13)),
-          ]),
-        ),
-        const SizedBox(width: 12),
+          const SizedBox(width: 12),
+        ],
 
         // Notification bell
         Stack(children: [
