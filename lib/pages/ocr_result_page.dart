@@ -844,7 +844,12 @@ class _OcrResultPageState extends State<OcrResultPage> {
                 final mat  = matCtrl.text.isNotEmpty ? matCtrl.text : 'Brick';
                 switch (category) {
                   case 'Walls':
-                    final item = WallItem(room: roomName, component: comp, l: l, h: h, w: w, material: mat);
+                    // Guard thickness: a real brick wall is >= 3". If a too-thin
+                    // value slips in, default by type (IW 4", EW/other 9").
+                    final wallW = w >= 3
+                        ? w
+                        : (comp.toUpperCase().startsWith('IW') ? 4 : 9);
+                    final item = WallItem(room: roomName, component: comp, l: l, h: h, w: wallW, material: mat);
                     editIndex != null ? _walls[editIndex] = item : _walls.add(item); break;
                   case 'Doors':
                     final item = OpeningItem(room: roomName, component: comp, type: 'Door', l: l, h: h, w: w, material: mat);
