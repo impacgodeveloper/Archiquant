@@ -1378,6 +1378,28 @@ class _BricksTab extends StatelessWidget {
           foot('NET VOLUME  =  Gross − Windows − Doors', netCuft,
               const Color(0xFF065F46)),
 
+          // ── Conversion breakdown (mirrors client master) ──
+          row([
+            cell('Volume conversion  (Net CFT × 0.028)', 13, align: TextAlign.left, bold: true),
+            cell('', 3),
+            cell('${netCum.toStringAsFixed(2)} m³', 3, bold: true, col: AppTheme.slate800),
+          ], 0),
+          row([
+            cell('Item conversion  (m³ × 500 bricks/m³)', 13, align: TextAlign.left),
+            cell('', 3),
+            cell('${(netCum * 500).toStringAsFixed(3)} nos', 3, col: AppTheme.slate700),
+          ], 1),
+          row([
+            cell('Wastage allowance  ($buffer%)', 13, align: TextAlign.left),
+            cell('', 3),
+            cell('${(netCum * 500 * (double.tryParse(buffer) ?? 5) / 100).toStringAsFixed(2)} nos', 3, col: AppTheme.slate700),
+          ], 0),
+          row([
+            cell('Total with wastage', 13, align: TextAlign.left, bold: true),
+            cell('', 3),
+            cell('${(netCum * 500 * (1 + (double.tryParse(buffer) ?? 5) / 100)).toStringAsFixed(2)} nos', 3, bold: true, col: AppTheme.slate800),
+          ], 1),
+
           // Bricks
           Container(
             width: double.infinity,
@@ -1388,7 +1410,7 @@ class _BricksTab extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                      'BRICKS  =  ${netCum.toStringAsFixed(4)} m³ × 500 + $buffer% wastage',
+                      'FINAL TAKE-OFF  (rounded up)',
                       style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
