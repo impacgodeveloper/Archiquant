@@ -644,7 +644,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
 
         const wallFaceSqft    = L * H;
         const wallVolumeCuFt  = L * B * H * nos;
-        const wallVolumeCuM   = wallVolumeCuFt * 0.0283168;
+        const wallVolumeCuM   = wallVolumeCuFt * 0.028;
         // BOQ method: bricks = brickwork VOLUME (m³) × bricks-per-m³
         const bricksPerFace   = wallFaceSqft / BRICK_FACE_SQFT;   // kept for reference only
         const bricksRaw       = wallVolumeCuM * BRICKS_PER_M3;
@@ -711,7 +711,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
       for (const o of openings) {
         const B         = thicknessInFeet(o.thick);
         const volCuFt   = o.L * B * o.H * o.nos;
-        const volCuM    = volCuFt * 0.0283168;
+        const volCuM    = volCuFt * 0.028;
         const dedBricks = Math.ceil(volCuM * BRICKS_PER_M3);
         totalDedBricks += dedBricks;
         totalVolCuFt   += volCuFt;
@@ -727,7 +727,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
 
     const windowDed = calcOpeningDeduction(windowOpenings);
     const doorDed   = calcOpeningDeduction(doorOpenings);
-    const FT3_M3 = 0.0283168;
+    const FT3_M3 = 0.028;
 
     // ── Volumes (BOQ Excel method) ─────────────────────────────
     const totalGrossVolumeCuFt = allBreakdown.reduce((s, w) => s + w.wall_volume_cuft, 0);
@@ -1358,13 +1358,13 @@ app.get("/projects/:project_id/takeoff", authMiddleware, async (req, res) => {
         const H       = w.height_ft || 10;
         const B       = thicknessInFeet(w.thickness_inch || 9);
         const volCuFt = parseFloat((L * B * H * nos).toFixed(3));
-        const volCuM  = parseFloat((volCuFt * 0.0283168).toFixed(4));
+        const volCuM  = parseFloat((volCuFt * 0.028).toFixed(4));
         return { description: `${isExt ? 'Ext' : 'Int'} Wall ${w.thickness_inch || 9}"`, nos, L: parseFloat(L.toFixed(2)), B, H, qty_cuft: volCuFt, qty_cum: volCuM, unit: 'Cu.Ft', type: isExt ? 'external' : 'internal' };
       });
 
     const allWallRows        = [...buildWallRows(external, true), ...buildWallRows(internal, false)];
     const totalBrickworkCuFt = parseFloat(allWallRows.reduce((s, w) => s + w.qty_cuft, 0).toFixed(3));
-    const totalBrickworkCuM  = parseFloat((totalBrickworkCuFt * 0.0283168).toFixed(4));
+    const totalBrickworkCuM  = parseFloat((totalBrickworkCuFt * 0.028).toFixed(4));
 
     const windowRows = ocrWindows.map(w => ({
       description: `Window ${w.size_ft?.width || 0}×${w.size_ft?.height || 0}ft`,
@@ -1713,7 +1713,7 @@ app.get("/projects/:project_id/export/excel", authMiddleware, async (req, res) =
       { key: 'L', width: 11 }, { key: 'B', width: 11 }, { key: 'H', width: 11 },
       { key: 'volCuft', width: 15 }, { key: 'volCuM', width: 15 },
     ];
-    const FT3_TO_M3 = 0.0283168;
+    const FT3_TO_M3 = 0.028;
     const bufferPct = snap?.buffer_pct ?? snap?.formulas_used?.buffer_pct ?? 10;
 
     brickSheet.mergeCells('A1:G1');

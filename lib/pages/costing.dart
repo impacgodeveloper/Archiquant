@@ -1236,7 +1236,7 @@ class _BricksTab extends StatelessWidget {
   // Table 1 (Gross) → Table 2 (Windows/Openings) → Table 3 (Doors) → Net → Bricks
   Widget _excelBoq(List walls, List winItems, List doorItems, Map vol,
       Map grand, String buffer) {
-    const ft3tom3 = 0.0283168;
+    const ft3tom3 = 0.028;
     String n(dynamic v, int d) => _toD(v).toStringAsFixed(d);
 
     Expanded cell(String s, int flex,
