@@ -3573,17 +3573,26 @@ class _DashboardState extends State<Dashboard> {
             ),
             const SizedBox(height: 20),
 
-            // ── Chart + Materials ────────────────────────────
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(flex: 3, child: _buildChartCard()),
-                const SizedBox(width: 16),
-                SizedBox(
-                    width: 240,
-                    child: _buildMaterialInventory(combined)),
-              ],
-            ),
+            // ── Chart + Materials (side-by-side on wide, stacked on narrow) ──
+            LayoutBuilder(builder: (ctx, c) {
+              if (c.maxWidth >= 760) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 3, child: _buildChartCard()),
+                    const SizedBox(width: 16),
+                    SizedBox(width: 240, child: _buildMaterialInventory(combined)),
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  _buildChartCard(),
+                  const SizedBox(height: 16),
+                  _buildMaterialInventory(combined),
+                ],
+              );
+            }),
             const SizedBox(height: 20),
 
             // ── Recent Projects ──────────────────────────────
@@ -3657,11 +3666,14 @@ class _DashboardState extends State<Dashboard> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Active Projects',
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white)),
+              const Flexible(
+                child: Text('Active Projects',
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white)),
+              ),
               Container(
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 4),
