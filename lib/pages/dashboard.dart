@@ -3490,20 +3490,24 @@ class _DashboardState extends State<Dashboard> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Overview',
-                        style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white)),
-                    SizedBox(height: 4),
-                    Text('All projects at a glance',
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF64748B))),
-                  ],
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Overview',
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white)),
+                      SizedBox(height: 4),
+                      Text('All projects at a glance',
+                          maxLines: 2, overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF64748B))),
+                    ],
+                  ),
                 ),
                 Row(children: [
                   IconButton(

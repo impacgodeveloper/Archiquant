@@ -991,19 +991,23 @@ class _CostingState extends State<Costing>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Costing & Analysis',
-                    style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1E293B))),
-                SizedBox(height: 4),
-                Text('Material quantities and cost breakdown',
-                    style: TextStyle(
-                        fontSize: 14, color: Color(0xFF64748B))),
-              ],
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Costing & Analysis',
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1E293B))),
+                  SizedBox(height: 4),
+                  Text('Material quantities and cost breakdown',
+                      maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 14, color: Color(0xFF64748B))),
+                ],
+              ),
             ),
             Row(children: [
               IconButton(

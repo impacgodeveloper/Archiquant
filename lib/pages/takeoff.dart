@@ -86,20 +86,24 @@ class _TakeoffState extends State<Takeoff>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Material Quantity Takeoff (QTO)',
-                    style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1E293B))),
-                SizedBox(height: 4),
-                Text('Quantities extracted from OCR floor plan',
-                    style: TextStyle(
-                        fontSize: 14,
-                        color: Color(0xFF64748B))),
-              ],
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Material Quantity Takeoff (QTO)',
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1E293B))),
+                  SizedBox(height: 4),
+                  Text('Quantities extracted from OCR floor plan',
+                      maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF64748B))),
+                ],
+              ),
             ),
             Row(children: [
               IconButton(

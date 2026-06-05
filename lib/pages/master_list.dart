@@ -235,22 +235,26 @@ class _MasterListState extends State<MasterList>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Master List',
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Master List',
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1E293B))),
+                  SizedBox(height: 4),
+                  Text(
+                    'Manage material rates, GST and transport costs',
+                    maxLines: 2, overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1E293B))),
-                SizedBox(height: 4),
-                Text(
-                  'Manage material rates, GST and transport costs',
-                  style: TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFF64748B)),
-                ),
-              ],
+                        fontSize: 14,
+                        color: Color(0xFF64748B)),
+                  ),
+                ],
+              ),
             ),
             Row(children: [
               IconButton(

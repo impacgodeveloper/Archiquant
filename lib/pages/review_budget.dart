@@ -204,20 +204,24 @@ class _ReviewBudgetState extends State<ReviewBudget> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Review & Budget',
-                    style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1E293B))),
-                const SizedBox(height: 4),
-                Text(_projectName,
-                    style: const TextStyle(
-                        fontSize: 14,
-                        color: Color(0xFF64748B))),
-              ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Review & Budget',
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1E293B))),
+                  const SizedBox(height: 4),
+                  Text(_projectName,
+                      maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF64748B))),
+                ],
+              ),
             ),
             Row(children: [
               IconButton(
