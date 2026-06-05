@@ -36,7 +36,7 @@ function normalizeOCR(ocr) {
     Object.values(ocr.internal_walls).forEach(w => {
       const key = `${w.thickness_in}-${w.height_ft}`;
       groups[key] = groups[key] || { thickness_inch: w.thickness_in, height_ft: w.height_ft, count: 0 };
-      groups[key].count++;
+      groups[key].count += Math.max(1, parseInt(w.nos) || 1);
     });
     internal = Object.values(groups);
   } else {
@@ -47,7 +47,7 @@ function normalizeOCR(ocr) {
     Object.values(ocr.external_walls).forEach(w => {
       const key = `${w.thickness_in}-${w.height_ft}`;
       groups[key] = groups[key] || { thickness_inch: w.thickness_in, height_ft: w.height_ft, count: 0 };
-      groups[key].count++;
+      groups[key].count += Math.max(1, parseInt(w.nos) || 1);
     });
     external = Object.values(groups);
   } else {
@@ -61,7 +61,7 @@ function normalizeOCR(ocr) {
     Object.values(ocr.doors).forEach(d => {
       const key = `${d.width_ft}x${d.height_ft}`;
       groups[key] = groups[key] || { size_ft: { width: d.width_ft, height: d.height_ft }, count: 0 };
-      groups[key].count++;
+      groups[key].count += Math.max(1, parseInt(d.nos) || 1);
     });
     doors = Object.values(groups);
   } else {
@@ -72,7 +72,7 @@ function normalizeOCR(ocr) {
     Object.values(ocr.windows).forEach(w => {
       const key = `${w.width_ft}x${w.height_ft}`;
       groups[key] = groups[key] || { size_ft: { width: w.width_ft, height: w.height_ft }, count: 0 };
-      groups[key].count++;
+      groups[key].count += Math.max(1, parseInt(w.nos) || 1);
     });
     windows = Object.values(groups);
   } else {
@@ -107,6 +107,7 @@ function applyEdits(rawOcr, edited) {
       length_ft: Number(x.l) || 0,
       thickness_in: safeThick,
       position: x.position || "unknown",
+      nos: Math.max(1, parseInt(x.nos) || 1),
     };
     if (isExt) {
       ew += 1;
@@ -122,12 +123,16 @@ function applyEdits(rawOcr, edited) {
   (edited.doors || []).forEach((x) => {
     dn += 1;
     doors[`d${dn}`] = { id: `d${dn}`, width_ft: Number(x.l) || 3,
-      height_ft: Number(x.h) || 7, on_wall: null };
+      height_ft: Number(x.h) || 7, on_wall: null,
+      thickness_in: Number(x.w) >= 3 ? Number(x.w) : 0,
+      nos: Math.max(1, parseInt(x.nos) || 1) };
   });
   (edited.windows || []).forEach((x) => {
     wn += 1;
     windows[`w${wn}`] = { id: `w${wn}`, width_ft: Number(x.l) || 4,
-      height_ft: Number(x.h) || 4, on_wall: null };
+      height_ft: Number(x.h) || 4, on_wall: null,
+      thickness_in: Number(x.w) >= 3 ? Number(x.w) : 0,
+      nos: Math.max(1, parseInt(x.nos) || 1) };
   });
 
   // Only override if the user actually has edited walls/openings
@@ -610,7 +615,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
           length_ft:      (w.length_ft && w.length_ft > 0) ? w.length_ft : fb,
           height_ft:      w.height_ft || 10,
           thickness_inch: w.thickness_in || defT,
-          nos:            1,
+          nos:            Math.max(1, parseInt(w.nos) || 1),
         }));
       }
       // Old grouped format: expand counts, lengths unknown → fallback
@@ -630,7 +635,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
 
     const calcWallBricks = (wallList) => {
       return wallList.map((wall) => {
-        const nos        = 1;                       // each entry is one physical wall
+        const nos        = Math.max(1, parseInt(wall.nos) || 1);  // count of identical walls
         const L          = wall.length_ft;
         const H          = wall.height_ft || 10;
         const thick      = wall.thickness_inch || 9;
@@ -685,8 +690,10 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
     const buildOpenings = (rawMap, grouped) => {
       if (rawMap && !Array.isArray(rawMap) && Object.keys(rawMap).length) {
         return Object.values(rawMap).map((o) => ({
-          L: o.width_ft || 0, H: o.height_ft || 0, nos: 1,
-          thick: wallThk[o.on_wall] || 9,
+          L: o.width_ft || 0, H: o.height_ft || 0,
+          nos: Math.max(1, parseInt(o.nos) || 1),
+          // prefer the opening's own thickness (editor W field); else the wall it sits on
+          thick: (o.thickness_in && o.thickness_in >= 3) ? o.thickness_in : (wallThk[o.on_wall] || 9),
         }));
       }
       return (grouped || []).map((o) => ({
@@ -720,31 +727,40 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
 
     const windowDed = calcOpeningDeduction(windowOpenings);
     const doorDed   = calcOpeningDeduction(doorOpenings);
-    const totalDed  = windowDed.total_bricks + doorDed.total_bricks;
+    const FT3_M3 = 0.0283168;
 
-    const grossBricks = allBreakdown.reduce((s, w) => s + w.bricks_raw, 0);
-    const netBricks   = Math.max(0, grossBricks - totalDed);
-    const finalBricks = Math.ceil(netBricks * (1 + BUFFER_PCT / 100));
+    // ── Volumes (BOQ Excel method) ─────────────────────────────
+    const totalGrossVolumeCuFt = allBreakdown.reduce((s, w) => s + w.wall_volume_cuft, 0);
+    const totalDedVolumeCuFt   = (windowDed.volume_cuft || 0) + (doorDed.volume_cuft || 0);
+    const netVolumeCuFt        = Math.max(0, totalGrossVolumeCuFt - totalDedVolumeCuFt);
+    const netVolumeCuM         = parseFloat((netVolumeCuFt * FT3_M3).toFixed(4));
 
     const redRows    = allBreakdown.filter((w) => w.brick_type === "red_brick");
     const whiteRows  = allBreakdown.filter((w) => w.brick_type === "white_cement");
-    const redGross   = redRows.reduce((s, w) => s + w.bricks_raw, 0);
-    const whiteGross = whiteRows.reduce((s, w) => s + w.bricks_raw, 0);
-    const total      = redGross + whiteGross || 1;
+    const redGrossVolCuFt   = redRows.reduce((s, w) => s + w.wall_volume_cuft, 0);
+    const whiteGrossVolCuFt = whiteRows.reduce((s, w) => s + w.wall_volume_cuft, 0);
+    const splitDenom        = (redGrossVolCuFt + whiteGrossVolCuFt) || 1;
+    // split opening deductions between red/white by their share of wall volume
+    const redDedVolCuFt   = totalDedVolumeCuFt * (redGrossVolCuFt   / splitDenom);
+    const whiteDedVolCuFt = totalDedVolumeCuFt * (whiteGrossVolCuFt / splitDenom);
+    const redNetVolCuM    = Math.max(0, redGrossVolCuFt   - redDedVolCuFt)   * FT3_M3;
+    const whiteNetVolCuM  = Math.max(0, whiteGrossVolCuFt - whiteDedVolCuFt) * FT3_M3;
 
-    const redDed   = Math.ceil(totalDed * (redGross   / total));
-    const whiteDed = Math.ceil(totalDed * (whiteGross / total));
-    const redNet   = Math.max(0, redGross   - redDed);
-    const whiteNet = Math.max(0, whiteGross - whiteDed);
-    const redFinal   = Math.ceil(redNet   * (1 + BUFFER_PCT / 100));
-    const whiteFinal = Math.ceil(whiteNet * (1 + BUFFER_PCT / 100));
+    // ── Bricks = volume (m³) × bricks/m³ × buffer  (matches BOQ Excel) ──
+    const buf         = (1 + BUFFER_PCT / 100);
+    const grossBricks = Math.round(totalGrossVolumeCuFt * FT3_M3 * BRICKS_PER_M3);
+    const totalDed    = Math.round(totalDedVolumeCuFt   * FT3_M3 * BRICKS_PER_M3);
+    const netBricks   = Math.max(0, Math.round(netVolumeCuM * BRICKS_PER_M3));
+    const finalBricks = Math.ceil(netVolumeCuM * BRICKS_PER_M3 * buf);
 
-    const totalGrossVolumeCuFt = allBreakdown.reduce((s, w) => s + w.wall_volume_cuft, 0);
-    // Use the SAME opening volumes as the brick deduction (per-opening wall
-    // thickness) so brick, cement and sand all derive from one net volume.
-    const totalDedVolumeCuFt = (windowDed.volume_cuft || 0) + (doorDed.volume_cuft || 0);
-    const netVolumeCuFt = Math.max(0, totalGrossVolumeCuFt - totalDedVolumeCuFt);
-    const netVolumeCuM  = parseFloat((netVolumeCuFt * 0.0283168).toFixed(4));
+    const redGross   = Math.round(redGrossVolCuFt   * FT3_M3 * BRICKS_PER_M3);
+    const whiteGross = Math.round(whiteGrossVolCuFt * FT3_M3 * BRICKS_PER_M3);
+    const redDed     = Math.round(redDedVolCuFt     * FT3_M3 * BRICKS_PER_M3);
+    const whiteDed   = Math.round(whiteDedVolCuFt   * FT3_M3 * BRICKS_PER_M3);
+    const redNet     = Math.max(0, redGross   - redDed);
+    const whiteNet   = Math.max(0, whiteGross - whiteDed);
+    const redFinal   = Math.ceil(redNetVolCuM   * BRICKS_PER_M3 * buf);
+    const whiteFinal = Math.ceil(whiteNetVolCuM * BRICKS_PER_M3 * buf);
 
     const cementMasterData = {
       "1:3": { "12mm": 2.6, "18mm": 3.5 },

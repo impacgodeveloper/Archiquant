@@ -198,6 +198,7 @@ class _OcrResultPageState extends State<OcrResultPage> {
     Map<String, dynamic> dim(dynamic c) => {
           'component': c.component, 'l': c.l, 'h': c.h, 'w': c.w,
           'material': c.material, 'room': c.room,
+          if (c is WallItem || c is OpeningItem) 'nos': c.nos,
           if (c is WallItem) 'position': c.position,
         };
     Map<String, dynamic> pt(PointItem c) =>
@@ -633,19 +634,19 @@ class _OcrResultPageState extends State<OcrResultPage> {
     final h = _metricMode ? 'H(m)'  : 'H(ft)';
     final w = _metricMode ? 'W(mm)' : 'W(in)';
     final a = _metricMode ? 'Sqm'   : 'Sft';
-    if (cat == 'Walls') return ['Component', 'Pos', l, h, w, a, 'Material'];
-    if (cat == 'Doors' || cat == 'Windows') return ['Component', l, h, w, a, 'Material'];
+    if (cat == 'Walls') return ['Component', 'Nos', 'Pos', l, h, w, a, 'Material'];
+    if (cat == 'Doors' || cat == 'Windows') return ['Component', 'Nos', l, h, w, a, 'Material'];
     return ['Component', l, h, a, 'Material'];
   }
 
   List<List<String>> _rowsForCategory(String cat) {
     switch (cat) {
       case 'Walls':
-        return _walls.map((w) => [w.component, w.position.isEmpty ? '—' : w.position, _fmtL(w.l), _fmtH(w.h), _fmtW(w.w), _fmtA(w.sft), w.material]).toList();
+        return _walls.map((w) => [w.component, '×${w.nos}', w.position.isEmpty ? '—' : w.position, _fmtL(w.l), _fmtH(w.h), _fmtW(w.w), _fmtA(w.sft), w.material]).toList();
       case 'Doors':
-        return _doorItems.map((d) => [d.component, _fmtL(d.l), _fmtH(d.h), _fmtW(d.w), _fmtA(d.sft), d.material]).toList();
+        return _doorItems.map((d) => [d.component, '×${d.nos}', _fmtL(d.l), _fmtH(d.h), _fmtW(d.w), _fmtA(d.sft), d.material]).toList();
       case 'Windows':
-        return _windowItems.map((w) => [w.component, _fmtL(w.l), _fmtH(w.h), _fmtW(w.w), _fmtA(w.sft), w.material]).toList();
+        return _windowItems.map((w) => [w.component, '×${w.nos}', _fmtL(w.l), _fmtH(w.h), _fmtW(w.w), _fmtA(w.sft), w.material]).toList();
       case 'Electrical': return _electrical.map((e) => [e.component, e.type]).toList();
       case 'Plumbing':   return _plumbing.map((p)   => [p.component, p.type]).toList();
       case 'Ceiling':    return _ceiling.map((c)    => [c.component, _fmtL(c.l), _fmtH(c.h), _fmtA(c.sft), c.material]).toList();
@@ -790,9 +791,9 @@ class _OcrResultPageState extends State<OcrResultPage> {
 
   Map<String, dynamic>? _getItemAt(String category, int index) {
     switch (category) {
-      case 'Walls':      { final w = _walls[index];       return {'component': w.component, 'l': w.l, 'h': w.h, 'w': w.w, 'material': w.material}; }
-      case 'Doors':      { final d = _doorItems[index];   return {'component': d.component, 'l': d.l, 'h': d.h, 'w': d.w, 'material': d.material}; }
-      case 'Windows':    { final w = _windowItems[index]; return {'component': w.component, 'l': w.l, 'h': w.h, 'w': w.w, 'material': w.material}; }
+      case 'Walls':      { final w = _walls[index];       return {'component': w.component, 'l': w.l, 'h': w.h, 'w': w.w, 'material': w.material, 'nos': w.nos}; }
+      case 'Doors':      { final d = _doorItems[index];   return {'component': d.component, 'l': d.l, 'h': d.h, 'w': d.w, 'material': d.material, 'nos': d.nos}; }
+      case 'Windows':    { final w = _windowItems[index]; return {'component': w.component, 'l': w.l, 'h': w.h, 'w': w.w, 'material': w.material, 'nos': w.nos}; }
       case 'Electrical': { final e = _electrical[index];  return {'component': e.component, 'type': e.type}; }
       case 'Plumbing':   { final p = _plumbing[index];    return {'component': p.component, 'type': p.type}; }
       default: return null;
@@ -806,7 +807,9 @@ class _OcrResultPageState extends State<OcrResultPage> {
     final wCtrl    = TextEditingController(text: existing?['w']?.toString() ?? '');
     final matCtrl  = TextEditingController(text: existing?['material'] ?? '');
     final typeCtrl = TextEditingController(text: existing?['type'] ?? '');
+    final nosCtrl  = TextEditingController(text: existing?['nos']?.toString() ?? '1');
     final isPoint  = category == 'Electrical' || category == 'Plumbing';
+    final hasNos   = category == 'Walls' || category == 'Doors' || category == 'Windows';
     final roomName = zones.isNotEmpty ? (zones.first['label']?.toString() ?? zones.first['name']?.toString() ?? 'Room') : 'Room';
 
     showDialog(
@@ -829,6 +832,11 @@ class _OcrResultPageState extends State<OcrResultPage> {
               const SizedBox(width: 8),
               Expanded(child: _field('Material', matCtrl)),
             ]),
+            if (hasNos)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: _field('Nos (count, e.g. 3 identical)', nosCtrl, num: true),
+              ),
           ],
         ])),
         actions: [
@@ -842,6 +850,7 @@ class _OcrResultPageState extends State<OcrResultPage> {
                 final h    = _parseL(hCtrl.text.isNotEmpty ? hCtrl.text : '9');
                 final w    = _parseW(wCtrl.text.isNotEmpty ? wCtrl.text : '9');
                 final mat  = matCtrl.text.isNotEmpty ? matCtrl.text : 'Brick';
+                final nos  = (int.tryParse(nosCtrl.text.trim()) ?? 1).clamp(1, 999);
                 switch (category) {
                   case 'Walls':
                     // Guard thickness: a real brick wall is >= 3". If a too-thin
@@ -849,13 +858,13 @@ class _OcrResultPageState extends State<OcrResultPage> {
                     final wallW = w >= 3
                         ? w
                         : (comp.toUpperCase().startsWith('IW') ? 4 : 9);
-                    final item = WallItem(room: roomName, component: comp, l: l, h: h, w: wallW, material: mat);
+                    final item = WallItem(room: roomName, component: comp, l: l, h: h, w: wallW, material: mat, nos: nos);
                     editIndex != null ? _walls[editIndex] = item : _walls.add(item); break;
                   case 'Doors':
-                    final item = OpeningItem(room: roomName, component: comp, type: 'Door', l: l, h: h, w: w, material: mat);
+                    final item = OpeningItem(room: roomName, component: comp, type: 'Door', l: l, h: h, w: w, material: mat, nos: nos);
                     editIndex != null ? _doorItems[editIndex] = item : _doorItems.add(item); break;
                   case 'Windows':
-                    final item = OpeningItem(room: roomName, component: comp, type: 'Window', l: l, h: h, w: w, material: mat);
+                    final item = OpeningItem(room: roomName, component: comp, type: 'Window', l: l, h: h, w: w, material: mat, nos: nos);
                     editIndex != null ? _windowItems[editIndex] = item : _windowItems.add(item); break;
                   case 'Electrical':
                     final item = PointItem(room: roomName, component: comp, type: typeCtrl.text.isNotEmpty ? typeCtrl.text : 'Switch');

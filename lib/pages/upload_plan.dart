@@ -28,21 +28,23 @@ class AppTheme {
 class WallItem {
   String room, component, material, position;
   double l, h;
-  int w;
+  int w, nos;
   WallItem({required this.room, required this.component, required this.l,
-      required this.h, required this.w, this.material = 'Brick', this.position = ''});
-  double get sft  => l * h;
-  double get cuft => l * h * (w / 12);
+      required this.h, required this.w, this.material = 'Brick', this.position = '',
+      this.nos = 1});
+  double get sft  => l * h * nos;
+  double get cuft => l * h * (w / 12) * nos;
 }
 
 class OpeningItem {
   String room, component, type, material;
   double l, h;
-  int w;
+  int w, nos;
   OpeningItem({required this.room, required this.component, required this.type,
-      required this.l, required this.h, required this.w, this.material = 'Wood'});
-  double get sft  => l * h;
-  double get cuft => l * h * (w / 12);
+      required this.l, required this.h, required this.w, this.material = 'Wood',
+      this.nos = 1});
+  double get sft  => l * h * nos;
+  double get cuft => l * h * (w / 12) * nos;
 }
 
 class PointItem {
