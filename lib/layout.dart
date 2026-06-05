@@ -27,7 +27,17 @@ class AppLayout extends StatelessWidget {
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.all(wide ? 24 : 12),
-                      child: child,
+                      // Pages are designed for a desktop width. On smaller
+                      // screens, render at that width and let the content
+                      // scroll horizontally instead of overflowing.
+                      child: LayoutBuilder(builder: (ctx, c) {
+                        const designMin = 1024.0;
+                        if (c.maxWidth >= designMin) return child;
+                        return SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: SizedBox(width: designMin, child: child),
+                        );
+                      }),
                     ),
                   ),
                 ],
