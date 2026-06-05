@@ -1229,6 +1229,183 @@ class _BricksTab extends StatelessWidget {
   static int _toInt(dynamic v) =>
       v == null ? 0 : (v is int ? v : int.tryParse(v.toString()) ?? 0);
 
+  static double _toD(dynamic v) =>
+      v == null ? 0 : (v is num ? v.toDouble() : double.tryParse(v.toString()) ?? 0);
+
+  // BOQ — Brick Work Calculation rendered exactly like the client's Excel:
+  // Table 1 (Gross) → Table 2 (Windows/Openings) → Table 3 (Doors) → Net → Bricks
+  Widget _excelBoq(List walls, List winItems, List doorItems, Map vol,
+      Map grand, String buffer) {
+    const ft3tom3 = 0.0283168;
+    String n(dynamic v, int d) => _toD(v).toStringAsFixed(d);
+
+    Expanded cell(String s, int flex,
+            {Color? col, TextAlign align = TextAlign.center, bool bold = false, double size = 11.5}) =>
+        Expanded(
+          flex: flex,
+          child: Text(s,
+              textAlign: align,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: size,
+                  fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                  color: col ?? AppTheme.slate700)),
+        );
+
+    Widget banner(String t, Color bg) => Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          color: bg,
+          child: Text(t,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  letterSpacing: 0.4)),
+        );
+
+    Widget hdr(List<Widget> cells, Color bg) => Container(
+          color: bg,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: cells),
+        );
+
+    Widget row(List<Widget> cells, int i) => Container(
+          color: i.isEven ? Colors.white : AppTheme.slate50,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppTheme.slate100))),
+          child: Row(children: cells),
+        );
+
+    Widget foot(String label, double cuft, Color bg) => Container(
+          color: bg,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: [
+            cell(label, 13, bold: true, col: Colors.white, align: TextAlign.left),
+            cell(cuft.toStringAsFixed(2), 3, bold: true, col: Colors.white),
+            cell((cuft * ft3tom3).toStringAsFixed(4), 3, bold: true, col: Colors.white),
+          ]),
+        );
+
+    final hStyle = AppTheme.slate500;
+    final grossCuft = _toD(vol['gross_volume_cuft']);
+    final netCuft   = _toD(vol['net_volume_cuft']);
+    final netCum    = _toD(vol['net_volume_cum']);
+    final winCuft   = winItems.fold<double>(0, (s, o) => s + _toD(o['volume_cuft']));
+    final doorCuft  = doorItems.fold<double>(0, (s, o) => s + _toD(o['volume_cuft']));
+
+    Widget dedRows(List items) => Column(
+          children: List.generate(items.length, (i) {
+            final o = items[i];
+            return row([
+              cell('${o['description'] ?? ''}', 11, align: TextAlign.left),
+              cell('${o['nos'] ?? 1}', 2),
+              cell(n(o['volume_cuft'], 2), 3),
+              cell(n(_toD(o['volume_cuft']) * ft3tom3, 4), 3),
+            ], i);
+          }),
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.slate200),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          banner('BRICK WORK CALCULATION', AppTheme.slate900),
+
+          // TABLE 1 — GROSS WALL VOLUME
+          banner('TABLE 1  —  GROSS WALL VOLUME', AppTheme.slate700),
+          hdr([
+            cell('Description', 5, col: hStyle, align: TextAlign.left, bold: true, size: 10.5),
+            cell('Nos', 2, col: hStyle, bold: true, size: 10.5),
+            cell('L (ft)', 2, col: hStyle, bold: true, size: 10.5),
+            cell('B (ft)', 2, col: hStyle, bold: true, size: 10.5),
+            cell('H (ft)', 2, col: hStyle, bold: true, size: 10.5),
+            cell('Cu.Ft', 3, col: hStyle, bold: true, size: 10.5),
+            cell('m³', 3, col: hStyle, bold: true, size: 10.5),
+          ], AppTheme.slate100),
+          ...List.generate(walls.length, (i) {
+            final w = walls[i];
+            return row([
+              cell('${w['description'] ?? ''}', 5, align: TextAlign.left),
+              cell('${w['nos'] ?? 1}', 2),
+              cell(n(w['L'], 2), 2),
+              cell(n(w['thickness_ft'], 3), 2),
+              cell(n(w['H'], 2), 2),
+              cell(n(w['wall_volume_cuft'], 2), 3),
+              cell(n(w['wall_volume_cum'], 4), 3),
+            ], i);
+          }),
+          foot('GROSS TOTAL', grossCuft, AppTheme.slate900),
+
+          // TABLE 2 — WINDOWS / OPENINGS
+          banner('TABLE 2  —  DEDUCTIONS (Windows / Vents / Openings)',
+              const Color(0xFFB45309)),
+          hdr([
+            cell('Opening (L×H, thk)', 11, col: hStyle, align: TextAlign.left, bold: true, size: 10.5),
+            cell('Nos', 2, col: hStyle, bold: true, size: 10.5),
+            cell('Cu.Ft', 3, col: hStyle, bold: true, size: 10.5),
+            cell('m³', 3, col: hStyle, bold: true, size: 10.5),
+          ], AppTheme.slate100),
+          if (winItems.isEmpty)
+            row([cell('No windows detected', 19, align: TextAlign.left, col: AppTheme.slate400)], 0)
+          else
+            dedRows(winItems),
+          foot('WINDOW / OPENING DEDUCTION', winCuft, const Color(0xFFB45309)),
+
+          // TABLE 3 — DOORS
+          banner('TABLE 3  —  DEDUCTIONS (Doors)', const Color(0xFF9A3412)),
+          hdr([
+            cell('Door (L×H, thk)', 11, col: hStyle, align: TextAlign.left, bold: true, size: 10.5),
+            cell('Nos', 2, col: hStyle, bold: true, size: 10.5),
+            cell('Cu.Ft', 3, col: hStyle, bold: true, size: 10.5),
+            cell('m³', 3, col: hStyle, bold: true, size: 10.5),
+          ], AppTheme.slate100),
+          if (doorItems.isEmpty)
+            row([cell('No doors detected', 19, align: TextAlign.left, col: AppTheme.slate400)], 0)
+          else
+            dedRows(doorItems),
+          foot('DOOR DEDUCTION', doorCuft, const Color(0xFF9A3412)),
+
+          // NET
+          foot('NET VOLUME  =  Gross − Windows − Doors', netCuft,
+              const Color(0xFF065F46)),
+
+          // Bricks
+          Container(
+            width: double.infinity,
+            color: const Color(0xFFDC2626),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                      'BRICKS  =  ${netCum.toStringAsFixed(4)} m³ × 500 + $buffer% wastage',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12.5)),
+                ),
+                Text('${grand['final_bricks'] ?? 0} bricks',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final grand    = data['grand_total']  ?? {};
@@ -1239,6 +1416,12 @@ class _BricksTab extends StatelessWidget {
         (data['formulas_used'] is Map ? data['formulas_used']['buffer_pct'] : null) ??
         5).toString();
     final mult     = (1 + (double.tryParse(buffer) ?? 5) / 100).toStringAsFixed(2);
+    final walls     = (data['wall_breakdown'] as List?) ?? const [];
+    final winMap    = (deds['windows'] is Map) ? deds['windows'] as Map : const {};
+    final doorMap   = (deds['doors']   is Map) ? deds['doors']   as Map : const {};
+    final winItems  = (winMap['items']  as List?) ?? const [];
+    final doorItems = (doorMap['items'] as List?) ?? const [];
+    final vol       = (data['volume_summary'] is Map) ? data['volume_summary'] as Map : const {};
     final rawZones = data['zone_summary'];
     // Handle both List and Map responses from different backend versions
     final zones = rawZones is Map
@@ -1292,6 +1475,10 @@ class _BricksTab extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 16),
+
+          // ── BOQ — Brick Work Calculation (client Excel format) ──
+          _excelBoq(walls, winItems, doorItems, vol, grand, buffer),
           const SizedBox(height: 16),
 
           // Zone areas
