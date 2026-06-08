@@ -64,15 +64,48 @@ class _OcrResultPageState extends State<OcrResultPage> {
   String get _heightLabel => _metricMode ? 'Height (m)'  : 'Height (ft)';
   String get _widthLabel  => _metricMode ? 'Width (mm)'  : 'Width (in)';
 
+  bool _loadingPlan = true;
+  bool _hasPlan     = false;
+
   @override
   void initState() {
     super.initState();
-    // Fast path: show the last in-memory upload immediately (if any)
-    final cached = OcrStore.instance.data;
-    if (cached != null) _applyData(cached, OcrStore.instance.editedComponents);
-    // Then load the CURRENTLY-SELECTED project's saved plan from the DB so the
-    // page reflects the project picked in the top-bar dropdown (no re-upload).
-    _loadCurrentProjectPlan();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    final prefs = await SharedPreferences.getInstance();
+    final pid = prefs.getString('current_project_id') ?? '';
+
+    Map<String, dynamic>? data;
+    Map<String, dynamic>? edited;
+
+    if (pid.isNotEmpty) {
+      // A project is selected → its DB plan is the source of truth.
+      // Reuse cache only if it already belongs to THIS project (instant).
+      if (OcrStore.instance.projectId == pid && OcrStore.instance.data != null) {
+        data   = OcrStore.instance.data;
+        edited = OcrStore.instance.editedComponents;
+      } else {
+        final plan = await ApiService.getProjectPlan(pid);
+        if (plan != null && plan['ocr'] != null) {
+          data   = Map<String, dynamic>.from(plan['ocr'] as Map);
+          edited = plan['edited_components'] != null
+              ? Map<String, dynamic>.from(plan['edited_components'] as Map)
+              : null;
+          OcrStore.instance.data             = data;
+          OcrStore.instance.editedComponents = edited;
+          OcrStore.instance.projectId        = pid;
+        }
+      }
+    } else {
+      // No project selected (e.g., right after an upload) → use the in-memory plan.
+      data   = OcrStore.instance.data;
+      edited = OcrStore.instance.editedComponents;
+    }
+
+    if (data != null) _applyData(data, edited);
+    if (mounted) setState(() { _loadingPlan = false; _hasPlan = data != null; });
   }
 
   void _applyData(Map<String, dynamic> data, Map<String, dynamic>? edited) {
@@ -83,21 +116,6 @@ class _OcrResultPageState extends State<OcrResultPage> {
     windows = w is Map ? w.values.toList() : (w is List ? w : []);
     _buildComponentsFromOcr();
     if (edited != null) _buildComponentsFromEdited(edited);
-  }
-
-  Future<void> _loadCurrentProjectPlan() async {
-    final prefs = await SharedPreferences.getInstance();
-    final pid = prefs.getString('current_project_id') ?? '';
-    if (pid.isEmpty) return;
-    final plan = await ApiService.getProjectPlan(pid);
-    if (!mounted || plan == null || plan['ocr'] == null) return;
-    final data   = Map<String, dynamic>.from(plan['ocr'] as Map);
-    final edited = plan['edited_components'] != null
-        ? Map<String, dynamic>.from(plan['edited_components'] as Map)
-        : null;
-    OcrStore.instance.data = data;
-    OcrStore.instance.editedComponents = edited;
-    setState(() => _applyData(data, edited));
   }
 
   // Rebuild editor lists from a previously-saved _componentsJson (user edits).
@@ -296,6 +314,7 @@ class _OcrResultPageState extends State<OcrResultPage> {
       if (res['success'] != true) throw Exception(res['error'] ?? 'Save failed');
       // Remember edits so returning to this page shows them (not raw OCR)
       OcrStore.instance.editedComponents = payload;
+      OcrStore.instance.projectId = projectId;
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -325,14 +344,20 @@ class _OcrResultPageState extends State<OcrResultPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (!OcrStore.instance.hasData) {
+    if (_loadingPlan) {
+      return SizedBox(
+        height: MediaQuery.of(context).size.height - 200,
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (!_hasPlan) {
       return SizedBox(
         height: MediaQuery.of(context).size.height - 200,
         child: Center(
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
             const Icon(LucideIcons.fileX, size: 48, color: AppTheme.slate400),
             const SizedBox(height: 16),
-            const Text('No plan analyzed yet.',
+            const Text('No plan for this project yet.',
                 style: TextStyle(fontSize: 16, color: AppTheme.slate500)),
             const SizedBox(height: 12),
             ElevatedButton.icon(
