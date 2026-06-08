@@ -121,6 +121,21 @@ class ApiService {
     return jsonDecode(res.body);
   }
 
+  // Latest saved plan for a project (OCR + user edits) — lets Plan Result show
+  // a selected project without re-uploading.
+  static Future<Map<String, dynamic>?> getProjectPlan(String projectId) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$baseUrl/projects/$projectId/plan'),
+        headers: await _headers,
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   static Future<Map<String, dynamic>> createProject(
     String name,
     String description,

@@ -530,6 +530,32 @@ app.put("/projects/:project_id/components", authMiddleware, async (req, res) => 
   }
 });
 
+// ── GET latest saved plan for a project (so Plan Result can show a selected
+//    project without re-uploading). Returns OCR merged with the user's edits. ──
+app.get("/projects/:project_id/plan", authMiddleware, async (req, res) => {
+  const { company_id } = req.user;
+  const { project_id } = req.params;
+  await withCompany(company_id);
+  try {
+    const { data: plans } = await supabase
+      .from("floor_plans").select("id, raw_ocr_data, edited_components")
+      .eq("project_id", project_id).eq("company_id", company_id)
+      .eq("ocr_status", "done").order("created_at", { ascending: false }).limit(1);
+
+    if (!plans?.length) return res.status(404).json({ error: "No plan found for this project." });
+
+    res.json({
+      success: true,
+      floor_plan_id: plans[0].id,
+      ocr: plans[0].raw_ocr_data || {},
+      edited_components: plans[0].edited_components || null,
+    });
+  } catch (err) {
+    console.error("Get plan error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════
 // BRICK CALCULATION
 // ═══════════════════════════════════════════════════════════

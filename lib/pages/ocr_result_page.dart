@@ -67,18 +67,37 @@ class _OcrResultPageState extends State<OcrResultPage> {
   @override
   void initState() {
     super.initState();
-    final data = OcrStore.instance.data;
-    if (data != null) {
-      _ocrData = data;
-      final z = data['zones'], d = data['doors'], w = data['windows'];
-      zones   = z is Map ? z.values.toList() : (z is List ? z : []);
-      doors   = d is Map ? d.values.toList() : (d is List ? d : []);
-      windows = w is Map ? w.values.toList() : (w is List ? w : []);
-      _buildComponentsFromOcr();
-      // If the user already edited & saved this room, show their edits (not raw OCR)
-      final edited = OcrStore.instance.editedComponents;
-      if (edited != null) _buildComponentsFromEdited(edited);
-    }
+    // Fast path: show the last in-memory upload immediately (if any)
+    final cached = OcrStore.instance.data;
+    if (cached != null) _applyData(cached, OcrStore.instance.editedComponents);
+    // Then load the CURRENTLY-SELECTED project's saved plan from the DB so the
+    // page reflects the project picked in the top-bar dropdown (no re-upload).
+    _loadCurrentProjectPlan();
+  }
+
+  void _applyData(Map<String, dynamic> data, Map<String, dynamic>? edited) {
+    _ocrData = data;
+    final z = data['zones'], d = data['doors'], w = data['windows'];
+    zones   = z is Map ? z.values.toList() : (z is List ? z : []);
+    doors   = d is Map ? d.values.toList() : (d is List ? d : []);
+    windows = w is Map ? w.values.toList() : (w is List ? w : []);
+    _buildComponentsFromOcr();
+    if (edited != null) _buildComponentsFromEdited(edited);
+  }
+
+  Future<void> _loadCurrentProjectPlan() async {
+    final prefs = await SharedPreferences.getInstance();
+    final pid = prefs.getString('current_project_id') ?? '';
+    if (pid.isEmpty) return;
+    final plan = await ApiService.getProjectPlan(pid);
+    if (!mounted || plan == null || plan['ocr'] == null) return;
+    final data   = Map<String, dynamic>.from(plan['ocr'] as Map);
+    final edited = plan['edited_components'] != null
+        ? Map<String, dynamic>.from(plan['edited_components'] as Map)
+        : null;
+    OcrStore.instance.data = data;
+    OcrStore.instance.editedComponents = edited;
+    setState(() => _applyData(data, edited));
   }
 
   // Rebuild editor lists from a previously-saved _componentsJson (user edits).

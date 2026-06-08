@@ -2,7 +2,9 @@
  import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/api_service.dart';
+import 'services/project_store.dart';
 import 'utils/app_colors.dart';
 
 class AppLayout extends StatelessWidget {
@@ -32,10 +34,16 @@ class AppLayout extends StatelessWidget {
                       // scroll horizontally instead of overflowing.
                       child: LayoutBuilder(builder: (ctx, c) {
                         const designMin = 1024.0;
-                        if (c.maxWidth >= designMin) return child;
+                        // Re-key the page on project switch so it reloads fresh.
+                        final page = ValueListenableBuilder<String?>(
+                          valueListenable: gCurrentProject,
+                          builder: (_, pid, __) =>
+                              KeyedSubtree(key: ValueKey('proj-$pid'), child: child),
+                        );
+                        if (c.maxWidth >= designMin) return page;
                         return SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
-                          child: SizedBox(width: designMin, child: child),
+                          child: SizedBox(width: designMin, child: page),
                         );
                       }),
                     ),
@@ -335,27 +343,9 @@ class _TopBar extends StatelessWidget {
 
         const Spacer(),
 
-        // Search — hidden on narrow screens to save space
-        if (!compact) ...[
-          Container(
-            width: 240, height: 38,
-            decoration: BoxDecoration(
-              color: const Color(0xFFEEF2F7),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFD0DAE8)),
-            ),
-            child: const Row(children: [
-              SizedBox(width: 12),
-              Icon(LucideIcons.search,
-                  size: 15, color: Color(0xFF9BAAB8)),
-              SizedBox(width: 8),
-              Text('Search...',
-                  style: TextStyle(
-                      color: Color(0xFF9BAAB8), fontSize: 13)),
-            ]),
-          ),
-          const SizedBox(width: 12),
-        ],
+        // Global project selector — pick a saved project (no re-upload needed)
+        const _ProjectSelector(),
+        const SizedBox(width: 12),
 
         // Notification bell
         Stack(children: [
@@ -382,40 +372,48 @@ class _TopBar extends StatelessWidget {
         const SizedBox(width: 8),
 
         // Settings
-        Container(
-          width: 38, height: 38,
-          decoration: BoxDecoration(
-            color: const Color(0xFFEEF2F7),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFD0DAE8)),
+        InkWell(
+          onTap: () => context.go('/settings'),
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: 38, height: 38,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEEF2F7),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFD0DAE8)),
+            ),
+            child: const Icon(LucideIcons.settings,
+                size: 17, color: Color(0xFF6B7A8D)),
           ),
-          child: const Icon(LucideIcons.settings,
-              size: 17, color: Color(0xFF6B7A8D)),
         ),
         const SizedBox(width: 8),
 
-        // User avatar
-        Container(
-          width: 38, height: 38,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF1E6FD9), Color(0xFF00BCD4)],
-            ),
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF1E6FD9).withOpacity(0.3),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
+        // User avatar → profile/settings
+        InkWell(
+          onTap: () => context.go('/settings'),
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: 38, height: 38,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF1E6FD9), Color(0xFF00BCD4)],
               ),
-            ],
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF1E6FD9).withOpacity(0.3),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            alignment: Alignment.center,
+            child: const Text('A',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15)),
           ),
-          alignment: Alignment.center,
-          child: const Text('A',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15)),
         ),
       ]),
     );
@@ -443,5 +441,115 @@ class _TopBar extends StatelessWidget {
     if (location.contains('project'))  return LucideIcons.folderPlus;
     if (location.contains('settings')) return LucideIcons.settings;
     return LucideIcons.layoutDashboard;
+  }
+}
+
+// ─── Global project selector (top bar) ────────────────────────
+class _ProjectSelector extends StatefulWidget {
+  const _ProjectSelector();
+  @override
+  State<_ProjectSelector> createState() => _ProjectSelectorState();
+}
+
+class _ProjectSelectorState extends State<_ProjectSelector> {
+  List<dynamic> _projects = [];
+  String? _selectedId;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+    gCurrentProject.addListener(_onGlobalChange);
+  }
+
+  @override
+  void dispose() {
+    gCurrentProject.removeListener(_onGlobalChange);
+    super.dispose();
+  }
+
+  void _onGlobalChange() {
+    if (mounted && gCurrentProject.value != _selectedId) {
+      setState(() => _selectedId = gCurrentProject.value);
+    }
+  }
+
+  Future<void> _init() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cur = prefs.getString('current_project_id') ?? '';
+      final projects = await ApiService.getProjects();
+      if ((gCurrentProject.value == null || gCurrentProject.value!.isEmpty) && cur.isNotEmpty) {
+        gCurrentProject.value = cur;
+      }
+      if (mounted) {
+        setState(() {
+          _projects = projects;
+          _selectedId = cur.isNotEmpty
+              ? cur
+              : (projects.isNotEmpty ? projects.first['id'] as String? : null);
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _select(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('current_project_id', id);
+    setState(() => _selectedId = id);
+    gCurrentProject.value = id; // rebuilds the routed page → reloads data
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = _projects.firstWhere(
+      (p) => p['id'] == _selectedId,
+      orElse: () => {'name': _loading ? 'Loading…' : 'Select Project'},
+    )['name']?.toString() ?? 'Project';
+
+    return PopupMenuButton<String>(
+      tooltip: 'Switch project',
+      onSelected: _select,
+      itemBuilder: (_) => [
+        if (_projects.isEmpty)
+          const PopupMenuItem<String>(enabled: false, child: Text('No projects yet')),
+        ..._projects.map((p) => PopupMenuItem<String>(
+          value: p['id'] as String,
+          child: Row(children: [
+            Icon(p['id'] == _selectedId ? LucideIcons.check : LucideIcons.folder,
+                size: 15,
+                color: p['id'] == _selectedId
+                    ? const Color(0xFF1E6FD9) : const Color(0xFF9BAAB8)),
+            const SizedBox(width: 8),
+            Flexible(child: Text(p['name']?.toString() ?? 'Unnamed',
+                overflow: TextOverflow.ellipsis)),
+          ]),
+        )),
+      ],
+      child: Container(
+        height: 38,
+        constraints: const BoxConstraints(maxWidth: 220),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEEF2F7),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFD0DAE8)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(LucideIcons.folderOpen, size: 15, color: Color(0xFF1E6FD9)),
+          const SizedBox(width: 8),
+          Flexible(child: Text(name,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  color: Color(0xFF1A2332), fontSize: 13, fontWeight: FontWeight.w500))),
+          const SizedBox(width: 6),
+          const Icon(LucideIcons.chevronDown, size: 15, color: Color(0xFF6B7A8D)),
+        ]),
+      ),
+    );
   }
 }

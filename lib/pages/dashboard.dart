@@ -3364,20 +3364,22 @@ class _DashboardState extends State<Dashboard> {
       final projects = results[0] as List<dynamic>;
       final settings = results[1] as Map<String, dynamic>;
 
-      final allEsts = <Map<String, dynamic>>[];
-      for (final p in projects) {
+      // Fetch every project's estimations in PARALLEL (was sequential → slow)
+      final estLists = await Future.wait(projects.map((p) async {
         try {
           final ests = await ApiService.getEstimations(p['id']);
           if (ests.isNotEmpty) {
-            allEsts.add({
+            return <String, dynamic>{
               'project_id':   p['id'],
               'project_name': p['name'] ?? 'Unnamed',
               'status':       p['status'] ?? 'active',
               'estimation':   ests.last,
-            });
+            };
           }
         } catch (_) {}
-      }
+        return null;
+      }));
+      final allEsts = estLists.whereType<Map<String, dynamic>>().toList();
 
       if (mounted) {
         setState(() {
