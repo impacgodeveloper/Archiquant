@@ -1283,12 +1283,14 @@ app.get("/projects/:project_id/review", authMiddleware, async (req, res) => {
     const totalMaterialCost = totalBrickCost + totalCementCost + totalSandCost;
     const totalCost         = totalMaterialCost + totalLabourCost;
 
+    // Material BOQ — bricks/cement/sand only (matches client Excel material section).
+    // Percentages are of the MATERIAL total; labour is reported separately below.
+    const matDen = totalMaterialCost || 1;
     const breakdown = [
-      { category: 'Red Bricks',          qty: redBricks,                         unit: 'pieces',   rate: parseFloat(redCostPerUnit.toFixed(2)),   total: parseFloat(redBrickCost.toFixed(2)),    pct: totalCost > 0 ? parseFloat((redBrickCost    / totalCost * 100).toFixed(1)) : 0, color: 'red'    },
-      { category: 'White Cement Blocks', qty: whiteBricks,                       unit: 'pieces',   rate: parseFloat(whiteCostPerUnit.toFixed(2)), total: parseFloat(whiteBrickCost.toFixed(2)),  pct: totalCost > 0 ? parseFloat((whiteBrickCost  / totalCost * 100).toFixed(1)) : 0, color: 'blue'   },
-      { category: 'Cement',              qty: parseFloat(cementBags.toFixed(2)), unit: 'bags',     rate: parseFloat(cementPerBag.toFixed(2)),     total: parseFloat(totalCementCost.toFixed(2)), pct: totalCost > 0 ? parseFloat((totalCementCost / totalCost * 100).toFixed(1)) : 0, color: 'blue'   },
-      { category: 'Sand',                qty: parseFloat(sandTons.toFixed(2)),   unit: 'tons',     rate: parseFloat(sandPerTon.toFixed(2)),       total: parseFloat(totalSandCost.toFixed(2)),   pct: totalCost > 0 ? parseFloat((totalSandCost   / totalCost * 100).toFixed(1)) : 0, color: 'teal'   },
-      { category: 'Labour',              qty: masonDays + helperDays,            unit: 'man-days', rate: parseFloat(((masonCost + helperCost) / (masonDays + helperDays || 1)).toFixed(2)), total: parseFloat(totalLabourCost.toFixed(2)), pct: totalCost > 0 ? parseFloat((totalLabourCost / totalCost * 100).toFixed(1)) : 0, color: 'purple' },
+      { category: 'Red Bricks',          qty: redBricks,                         unit: 'pieces', rate: parseFloat(redCostPerUnit.toFixed(2)),   total: parseFloat(redBrickCost.toFixed(2)),    pct: parseFloat((redBrickCost    / matDen * 100).toFixed(1)), color: 'red'  },
+      { category: 'White Cement Blocks', qty: whiteBricks,                       unit: 'pieces', rate: parseFloat(whiteCostPerUnit.toFixed(2)), total: parseFloat(whiteBrickCost.toFixed(2)),  pct: parseFloat((whiteBrickCost  / matDen * 100).toFixed(1)), color: 'blue' },
+      { category: 'Cement',              qty: parseFloat(cementBags.toFixed(2)), unit: 'bags',   rate: parseFloat(cementPerBag.toFixed(2)),     total: parseFloat(totalCementCost.toFixed(2)), pct: parseFloat((totalCementCost / matDen * 100).toFixed(1)), color: 'blue' },
+      { category: 'Sand',                qty: parseFloat(sandTons.toFixed(2)),   unit: 'tons',   rate: parseFloat(sandPerTon.toFixed(2)),       total: parseFloat(totalSandCost.toFixed(2)),   pct: parseFloat((totalSandCost   / matDen * 100).toFixed(1)), color: 'teal' },
     ];
 
     res.json({

@@ -342,13 +342,13 @@ class _ReviewBudgetState extends State<ReviewBudget> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('TOTAL PROJECT ESTIMATE',
+                const Text('MATERIAL COST ESTIMATE',
                     style: TextStyle(
                         color: Colors.white60,
                         fontSize: 12,
                         letterSpacing: 1.5)),
                 const SizedBox(height: 8),
-                Text(_fmt(total),
+                Text(_fmt(materials),
                     style: const TextStyle(
                         color: Colors.white,
                         fontSize: 40,
@@ -356,29 +356,26 @@ class _ReviewBudgetState extends State<ReviewBudget> {
                         letterSpacing: -1)),
                 const SizedBox(height: 4),
                 Text(
-                  '₹${total.toStringAsFixed(0)} (incl. materials + labour)',
+                  '+ ${_fmt(labour)} labour (shown separately)   •   ${_fmt(total)} all-in',
                   style: const TextStyle(
                       color: Colors.white60,
                       fontSize: 13),
                 ),
                 const SizedBox(height: 20),
                 Row(children: [
-                  _bannerStat('Materials',
-                      _fmt(materials),
-                      '${total > 0 ? (materials / total * 100).toStringAsFixed(0) : 0}%'),
-                  _vDivider(),
-                  _bannerStat('Labour',
-                      _fmt(labour),
-                      '${total > 0 ? (labour / total * 100).toStringAsFixed(0) : 0}%'),
-                  _vDivider(),
                   _bannerStat('Bricks',
                       _fmt(_d(summary['bricks'])),
-                      '${total > 0 ? (_d(summary['bricks']) / total * 100).toStringAsFixed(0) : 0}%'),
+                      '${materials > 0 ? (_d(summary['bricks']) / materials * 100).toStringAsFixed(0) : 0}%'),
                   _vDivider(),
-                  _bannerStat('Cement + Sand',
-                      _fmt(_d(summary['cement']) +
-                          _d(summary['sand'])),
-                      '${total > 0 ? ((_d(summary['cement']) + _d(summary['sand'])) / total * 100).toStringAsFixed(0) : 0}%'),
+                  _bannerStat('Cement',
+                      _fmt(_d(summary['cement'])),
+                      '${materials > 0 ? (_d(summary['cement']) / materials * 100).toStringAsFixed(0) : 0}%'),
+                  _vDivider(),
+                  _bannerStat('Sand',
+                      _fmt(_d(summary['sand'])),
+                      '${materials > 0 ? (_d(summary['sand']) / materials * 100).toStringAsFixed(0) : 0}%'),
+                  _vDivider(),
+                  _bannerStat('Labour (sep.)', _fmt(labour), ''),
                 ]),
               ],
             ),
@@ -457,7 +454,7 @@ class _ReviewBudgetState extends State<ReviewBudget> {
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF1E293B))),
                     const SizedBox(height: 12),
-                    _buildBOQTable(breakdown, total),
+                    _buildBOQTable(breakdown, materials),
                     const SizedBox(height: 20),
                     const Text('Rates Used',
                         style: TextStyle(
@@ -475,7 +472,7 @@ class _ReviewBudgetState extends State<ReviewBudget> {
               Expanded(
                 flex: 2,
                 child: Column(children: [
-                  _buildCostBreakdownCard(breakdown, total),
+                  _buildCostBreakdownCard(breakdown, materials),
                   const SizedBox(height: 16),
                   _buildLabourCard(quantities, summary),
                   const SizedBox(height: 16),
@@ -633,7 +630,7 @@ class _ReviewBudgetState extends State<ReviewBudget> {
           child: Row(children: [
             const Expanded(
               flex: 3,
-              child: Text('GRAND TOTAL',
+              child: Text('MATERIAL TOTAL',
                   style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
