@@ -22,12 +22,10 @@ void main() async {
   // commented `initialLocation: '/login'` below). Because every backend call
   // needs a JWT, we silently auto-login with a shared demo account on startup.
   // To RE-ENABLE login: restore `initialLocation: '/login'` and delete this block.
-  final token = await ApiService.getToken();
-  if (token == null || token.isEmpty) {
-    try {
-      await ApiService.login('adityaram@impacgo.com', 'demo1234', 'ipg');
-    } catch (_) {/* offline → login page still reachable at /login */}
-  }
+  // Always (re)login so a stale/expired token can never leave the app stuck.
+  try {
+    await ApiService.login('adityaram@impacgo.com', 'demo1234', 'ipg');
+  } catch (_) {/* offline → keep any existing token */}
   // ─────────────────────────────────────────────────────────────────────
 
   runApp(ArchiQuantApp());
