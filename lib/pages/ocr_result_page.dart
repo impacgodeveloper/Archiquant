@@ -75,7 +75,55 @@ class _OcrResultPageState extends State<OcrResultPage> {
       doors   = d is Map ? d.values.toList() : (d is List ? d : []);
       windows = w is Map ? w.values.toList() : (w is List ? w : []);
       _buildComponentsFromOcr();
+      // If the user already edited & saved this room, show their edits (not raw OCR)
+      final edited = OcrStore.instance.editedComponents;
+      if (edited != null) _buildComponentsFromEdited(edited);
     }
+  }
+
+  // Rebuild editor lists from a previously-saved _componentsJson (user edits).
+  void _buildComponentsFromEdited(Map<String, dynamic> j) {
+    List<T> parse<T>(String key, T Function(Map m) make) {
+      final raw = j[key];
+      if (raw is! List) return <T>[];
+      return raw.whereType<Map>().map(make).toList();
+    }
+    int wi(dynamic v) => _toInt(v);
+    double dd(dynamic v) => _toDouble(v);
+    String ss(dynamic v) => v?.toString() ?? '';
+
+    final walls = parse<WallItem>('walls', (m) => WallItem(
+        room: ss(m['room']), component: ss(m['component']),
+        l: dd(m['l']), h: dd(m['h']), w: wi(m['w']),
+        material: ss(m['material']).isEmpty ? 'Brick' : ss(m['material']),
+        position: ss(m['position']), nos: m['nos'] == null ? 1 : wi(m['nos'])));
+    final doorsL = parse<OpeningItem>('doors', (m) => OpeningItem(
+        room: ss(m['room']), component: ss(m['component']), type: 'Door',
+        l: dd(m['l']), h: dd(m['h']), w: wi(m['w']),
+        material: ss(m['material']).isEmpty ? 'Wood' : ss(m['material']),
+        nos: m['nos'] == null ? 1 : wi(m['nos'])));
+    final winsL = parse<OpeningItem>('windows', (m) => OpeningItem(
+        room: ss(m['room']), component: ss(m['component']), type: 'Window',
+        l: dd(m['l']), h: dd(m['h']), w: wi(m['w']),
+        material: ss(m['material']).isEmpty ? 'Aluminum' : ss(m['material']),
+        nos: m['nos'] == null ? 1 : wi(m['nos'])));
+    SimpleItem mkSimple(String type, Map m) => SimpleItem(
+        room: ss(m['room']), component: ss(m['component']), type: type,
+        l: dd(m['l']), h: dd(m['h']), w: wi(m['w']),
+        material: ss(m['material']));
+    PointItem mkPoint(Map m) => PointItem(
+        room: ss(m['room']), component: ss(m['component']), type: ss(m['type']));
+
+    if (walls.isNotEmpty || j['walls'] is List) { _walls..clear()..addAll(walls); }
+    if (j['doors'] is List)   { _doorItems..clear()..addAll(doorsL); }
+    if (j['windows'] is List) { _windowItems..clear()..addAll(winsL); }
+    if (j['electrical'] is List) { _electrical..clear()..addAll(parse('electrical', mkPoint)); }
+    if (j['plumbing'] is List)   { _plumbing..clear()..addAll(parse('plumbing', mkPoint)); }
+    if (j['ceiling'] is List)    { _ceiling..clear()..addAll(parse('ceiling', (m)=>mkSimple('Ceiling', m))); }
+    if (j['flooring'] is List)   { _flooring..clear()..addAll(parse('flooring', (m)=>mkSimple('Flooring', m))); }
+    if (j['finishes'] is List)   { _finishes..clear()..addAll(parse('finishes', (m)=>mkSimple('Finish', m))); }
+    if (j['furniture'] is List)  { _furniture..clear()..addAll(parse('furniture', (m)=>mkSimple('Furniture', m))); }
+    if (j['others'] is List)     { _others..clear()..addAll(parse('others', (m)=>mkSimple('Other', m))); }
   }
 
   int _countFor(String cat) {
@@ -224,8 +272,11 @@ class _OcrResultPageState extends State<OcrResultPage> {
       final projectId = prefs.getString('current_project_id') ?? '';
       if (projectId.isEmpty) throw Exception('No project selected');
 
-      final res = await ApiService.saveRoomComponents(projectId, _componentsJson());
+      final payload = _componentsJson();
+      final res = await ApiService.saveRoomComponents(projectId, payload);
       if (res['success'] != true) throw Exception(res['error'] ?? 'Save failed');
+      // Remember edits so returning to this page shows them (not raw OCR)
+      OcrStore.instance.editedComponents = payload;
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(

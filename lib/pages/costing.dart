@@ -2173,8 +2173,9 @@ class _CementTabState extends State<_CementTab> {
           ),
           const SizedBox(height: 20),
 
-          // Per wall breakdown
-          if (perWall.isNotEmpty) ...[
+          // Per-wall breakdown hidden — the BOQ (like the client Excel) shows
+          // cement/sand per MIX from the net volume, not split per wall.
+          if (false) ...[ // ignore: dead_code
             const Text('Cement per Wall',
                 style: TextStyle(
                     fontSize: 15,
