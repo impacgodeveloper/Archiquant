@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import '../services/api_service.dart';
+import '../services/project_store.dart';
 
 class ReviewBudget extends StatefulWidget {
   const ReviewBudget({super.key});
@@ -22,10 +23,17 @@ class _ReviewBudgetState extends State<ReviewBudget> {
   void initState() {
     super.initState();
     _load();
+    gCurrentProject.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    gCurrentProject.removeListener(_load);
+    super.dispose();
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    if (mounted) setState(() { _loading = true; _error = null; });
     try {
       final prefs     = await SharedPreferences.getInstance();
       final projectId = prefs.getString('current_project_id') ?? '';

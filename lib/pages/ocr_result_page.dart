@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/ocr_store.dart';
 import '../services/api_service.dart';
+import '../services/project_store.dart';
 import 'upload_plan.dart' show AppTheme, WallItem, OpeningItem, PointItem, SimpleItem, FloorPlanPainter;
 
 // ─── RESULTS PAGE (room editor) ─────────────────────────────────────────────────
@@ -71,11 +72,28 @@ class _OcrResultPageState extends State<OcrResultPage> {
   void initState() {
     super.initState();
     _bootstrap();
+    gCurrentProject.addListener(_onProjectChanged);
+  }
+
+  @override
+  void dispose() {
+    gCurrentProject.removeListener(_onProjectChanged);
+    super.dispose();
+  }
+
+  void _onProjectChanged() {
+    if (!mounted) return;
+    setState(() { _loadingPlan = true; _hasPlan = false; });
+    _bootstrap();
   }
 
   Future<void> _bootstrap() async {
     final prefs = await SharedPreferences.getInstance();
-    final pid = prefs.getString('current_project_id') ?? '';
+    // Prefer the live notifier (set by the top-bar dropdown) over prefs, so a
+    // switch reloads the right project even if this State was kept alive.
+    final pid = (gCurrentProject.value != null && gCurrentProject.value!.isNotEmpty)
+        ? gCurrentProject.value!
+        : (prefs.getString('current_project_id') ?? '');
 
     Map<String, dynamic>? data;
     Map<String, dynamic>? edited;
