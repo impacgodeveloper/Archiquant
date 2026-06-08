@@ -12,8 +12,24 @@ import 'pages/settings.dart';
 import 'pages/login.dart';
 import 'pages/upload_plan.dart';
 import 'pages/ocr_result_page.dart';
+import 'services/api_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // ── LOGIN PAGE BYPASS ────────────────────────────────────────────────
+  // The login screen is currently disabled as the entry point (see the
+  // commented `initialLocation: '/login'` below). Because every backend call
+  // needs a JWT, we silently auto-login with a shared demo account on startup.
+  // To RE-ENABLE login: restore `initialLocation: '/login'` and delete this block.
+  final token = await ApiService.getToken();
+  if (token == null || token.isEmpty) {
+    try {
+      await ApiService.login('adityaram@impacgo.com', 'demo1234', 'ipg');
+    } catch (_) {/* offline → login page still reachable at /login */}
+  }
+  // ─────────────────────────────────────────────────────────────────────
+
   runApp(ArchiQuantApp());
 }
 
@@ -21,7 +37,8 @@ class ArchiQuantApp extends StatelessWidget {
   ArchiQuantApp({super.key});
 
   final _router = GoRouter(
-    initialLocation: '/login',
+    // initialLocation: '/login',   // ← LOGIN PAGE COMMENTED OUT (bypassed)
+    initialLocation: '/',           // open straight to the dashboard
     routes: [
 
       // ── Auth pages (no sidebar) ──────────────────
