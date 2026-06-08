@@ -39,6 +39,13 @@ class ArchiQuantApp extends StatelessWidget {
   final _router = GoRouter(
     // initialLocation: '/login',   // ← LOGIN PAGE COMMENTED OUT (bypassed)
     initialLocation: '/',           // open straight to the dashboard
+    // Login disabled: any visit to /login (or /register) bounces to the app.
+    // To re-enable, delete this redirect and restore initialLocation: '/login'.
+    redirect: (context, state) {
+      final loc = state.matchedLocation;
+      if (loc == '/login' || loc == '/register') return '/';
+      return null;
+    },
     routes: [
 
       // ── Auth pages (no sidebar) ──────────────────
