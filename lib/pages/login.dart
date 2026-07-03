@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
 import '../services/api_service.dart';
+import '../utils/validators.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -32,6 +33,10 @@ class _LoginPageState extends State<LoginPage> {
         _passwordController.text.isEmpty ||
         _companySlugController.text.trim().isEmpty) {
       setState(() => _loginError = 'Please fill in all fields');
+      return;
+    }
+    if (!isValidEmail(_emailController.text)) {
+      setState(() => _loginError = 'Please enter a valid email address');
       return;
     }
 

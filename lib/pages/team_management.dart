@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../services/api_service.dart';
+import '../utils/validators.dart';
 
 class TeamManagementCard extends StatefulWidget {
   final String currentUserRole;
@@ -63,8 +64,13 @@ class _TeamManagementCardState extends State<TeamManagementCard> {
       setState(() => _error = 'Email and password are required');
       return;
     }
-    if (_passwordCtrl.text.length < 6) {
-      setState(() => _error = 'Password must be at least 6 characters');
+    if (!isValidEmail(_emailCtrl.text)) {
+      setState(() => _error = 'Please enter a valid email address');
+      return;
+    }
+    final pwErr = passwordError(_passwordCtrl.text);
+    if (pwErr != null) {
+      setState(() => _error = pwErr);
       return;
     }
 
@@ -76,6 +82,7 @@ class _TeamManagementCardState extends State<TeamManagementCard> {
         _passwordCtrl.text,
         _role,
       );
+      if (!mounted) return;
 
       if (result['success'] == true) {
         setState(() {
@@ -96,8 +103,9 @@ class _TeamManagementCardState extends State<TeamManagementCard> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
-        _error    = 'Error: $e';
+        _error    = e is ApiException ? e.message : 'Could not add user. Please try again.';
         _inviting = false;
       });
     }

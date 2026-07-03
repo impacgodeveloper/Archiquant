@@ -151,6 +151,12 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         setState(() {
           _formulas = data.cast<Map<String, dynamic>>();
+          // Dispose any controllers from a previous load before recreating them,
+          // otherwise each reload orphans the old TextEditingControllers.
+          for (final c in _formulaControllers.values) {
+            c.dispose();
+          }
+          _formulaControllers.clear();
           for (final f in _formulas) {
             final id   = f['id'] as String;
             final name = f['name'] as String;

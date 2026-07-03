@@ -1,7 +1,14 @@
 require("dotenv").config();
+const crypto     = require("crypto");
 const express    = require("express");
 const multer     = require("multer");
 const cors       = require("cors");
+const helmet     = require("helmet");
+const compression = require("compression");
+const rateLimit  = require("express-rate-limit");
+const pino       = require("pino");
+const pinoHttp   = require("pino-http");
+const Sentry     = require("@sentry/node");
 const path       = require("path");
 const fs         = require("fs");
 const bcrypt     = require("bcryptjs");
@@ -10,10 +17,92 @@ const PDFDocument = require("pdfkit");
 const ExcelJS    = require("exceljs");
 const { runOCR } = require("./services/easyocrService");
 const supabase   = require("./config/supabase");
+const ocrQueue   = require("./services/ocrQueue");
+const { safeArith, sanitizeBody } = require("./utils/security");
+const { isValidEmail, validatePassword } = require("./utils/validation");
+
+const IS_TEST = process.env.NODE_ENV === "test";
+const IS_PROD = process.env.NODE_ENV === "production";
+
+// ── Fail fast if critical secrets are missing (avoids per-request crashes) ──
+if (!IS_TEST) {
+  for (const key of ["JWT_SECRET", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"]) {
+    if (!process.env[key]) {
+      console.error(`FATAL: required env var ${key} is not set`);
+      process.exit(1);
+    }
+  }
+  // Production must not run with CORS wide open.
+  if (IS_PROD && !process.env.CORS_ORIGIN) {
+    console.error("FATAL: CORS_ORIGIN must be set in production (refusing to start allow-all)");
+    process.exit(1);
+  }
+}
+
+// ── Structured logging ──────────────────────────────────────────────────────
+const logger = pino({ level: process.env.LOG_LEVEL || (IS_TEST ? "silent" : "info") });
+const BCRYPT_ROUNDS = 12;
+
+// ── Sentry (no-op unless SENTRY_DSN is set) ─────────────────────────────────
+if (process.env.SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV || "production", tracesSampleRate: 0.1 });
+  logger.info("Sentry monitoring enabled");
+}
+
+// ── Token helpers (short access token + long refresh token) ─────────────────
+const ACCESS_TTL     = process.env.ACCESS_TOKEN_TTL  || "1h";
+const REFRESH_TTL    = process.env.REFRESH_TOKEN_TTL || "30d";
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+function signAccessToken(user, company) {
+  return jwt.sign(
+    { user_id: user.id, company_id: company.id, role: user.role, plan: company.plan, type: "access" },
+    process.env.JWT_SECRET, { expiresIn: ACCESS_TTL });
+}
+function signRefreshToken(user, company) {
+  return jwt.sign(
+    { user_id: user.id, company_id: company.id, type: "refresh" },
+    REFRESH_SECRET, { expiresIn: REFRESH_TTL });
+}
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.set("trust proxy", 1); // behind nginx/PM2 — needed for correct client IPs (rate limiting)
+app.use(pinoHttp({ logger, genReqId: (req) => req.headers["x-request-id"] || crypto.randomUUID() }));
+// Echo the request id back so clients/proxies can correlate logs ↔ responses.
+app.use((req, res, next) => { res.setHeader("X-Request-Id", req.id); next(); });
+app.use(helmet());
+app.use(compression());
+// CORS: lock to specific origins in production via CORS_ORIGIN
+// (comma-separated list, e.g. "https://archiquant.in,http://localhost:8080").
+// When unset (local dev), fall back to allow-all so nothing breaks.
+const corsOrigins = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+app.use(cors(corsOrigins.length ? { origin: corsOrigins } : undefined));
+app.use(express.json({ limit: "2mb" })); // cap body size (JSON-flood DoS guard)
+
+// ── Rate limiting ───────────────────────────────────────────────────────────
+// Global cap + a stricter limiter on auth routes (brute-force / abuse guard).
+// Disabled under test so the integration suite isn't throttled.
+app.use(rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false, skip: () => IS_TEST }));
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false,
+  skip: () => IS_TEST, message: { error: "Too many attempts, please try again later" } });
+
+// ── Health (liveness) — is the process up? ──────────────────────────────────
+app.get("/health", (req, res) => res.json({ status: "ok", uptime: process.uptime() }));
+
+// ── Readiness — can the process actually serve traffic (DB reachable)? ───────
+// Used by orchestrators/uptime monitors to decide whether to route requests.
+app.get("/ready", async (req, res) => {
+  try {
+    const { error } = await supabase.from("companies").select("id").limit(1);
+    if (error) throw error;
+    res.json({ status: "ready", db: "ok" });
+  } catch (err) {
+    req.log.error({ err }, "readiness check failed");
+    res.status(503).json({ status: "not_ready", db: "unreachable" });
+  }
+});
 
 // ── OCR format normalizer (handles both old list-format and new map-format) ──
 function normalizeOCR(ocr) {
@@ -145,14 +234,54 @@ function applyEdits(rawOcr, edited) {
   return ocr;
 }
 
-if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
+// safeArith() and sanitizeBody() are imported from ./utils/security.
+
+// Parse ?limit & ?offset for list endpoints. Default is generous (200) so
+// existing callers that pass nothing are unaffected, but unbounded scans are
+// capped. Returns the inclusive [from,to] range Supabase .range() expects.
+function paginate(req, { def = 200, max = 500 } = {}) {
+  let limit = parseInt(req.query.limit, 10);
+  let offset = parseInt(req.query.offset, 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = def;
+  if (limit > max) limit = max;
+  if (!Number.isFinite(offset) || offset < 0) offset = 0;
+  return { limit, offset, from: offset, to: offset + limit - 1 };
+}
+
+// Confirm a project belongs to the caller's company before writing children.
+async function ownsProject(project_id, company_id) {
+  const { data } = await supabase
+    .from("projects").select("id")
+    .eq("id", project_id).eq("company_id", company_id).maybeSingle();
+  return !!data;
+}
+
+const UPLOAD_DIR = path.join(__dirname, "uploads");
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads"),
-  filename:    (req, file, cb) =>
-      cb(null, Date.now() + "-" + file.originalname),
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename:    (req, file, cb) => {
+    // Sanitize the client-supplied name (strip path separators / metachars).
+    const safe = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, "_");
+    cb(null, `${Date.now()}-${safe}`);
+  },
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 }, // 25 MB, single file
+  fileFilter: (req, file, cb) => {
+    // Accept if EITHER the MIME type OR the file extension is allowed. Web
+    // multipart uploads often arrive as application/octet-stream (no explicit
+    // content-type), so the extension check prevents false rejections of
+    // legitimate PDF/PNG/JPG files.
+    const okMime = /^(application\/pdf|image\/(png|jpe?g))$/.test(file.mimetype || "");
+    const okExt  = /\.(pdf|png|jpe?g)$/i.test(file.originalname || "");
+    return (okMime || okExt)
+      ? cb(null, true)
+      : cb(new Error("Unsupported file type — upload a PDF, PNG, or JPG"));
+  },
+});
 
 async function withCompany(company_id) {
   await supabase.rpc("set_config", {
@@ -162,12 +291,15 @@ async function withCompany(company_id) {
 }
 
 function authMiddleware(req, res, next) {
-  const token =
-    req.headers.authorization?.split(" ")[1] ||
-    req.query.token;
+  // Header-only: the token must never travel in the URL (query params leak
+  // into browser history and server access logs).
+  const token = req.headers.authorization?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "No token" });
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    // A refresh token must never be accepted as an access token.
+    if (payload.type === "refresh") return res.status(401).json({ error: "Invalid token" });
+    req.user = payload;
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });
@@ -178,7 +310,7 @@ function authMiddleware(req, res, next) {
 // AUTH
 // ═══════════════════════════════════════════════════════════
 
-app.post("/auth/register", async (req, res) => {
+app.post("/auth/register", authLimiter, async (req, res) => {
   const {
     company_name, company_slug, email,
     password, plan = "starter", phone = "",
@@ -195,9 +327,16 @@ app.post("/auth/register", async (req, res) => {
     if (!company_name || !company_slug || !email || !password) {
       return res.status(400).json({ error: "Please fill all required fields" });
     }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: "Please enter a valid email address" });
+    }
+    const pw = validatePassword(password);
+    if (!pw.ok) {
+      return res.status(400).json({ error: pw.message });
+    }
 
     const { data: existingCompany } = await supabase
-      .from("companies").select("id").eq("slug", company_slug).single();
+      .from("companies").select("id").eq("slug", company_slug).maybeSingle();
     if (existingCompany) {
       return res.status(400).json({
         error: "This company ID is already taken. Please choose another."
@@ -205,7 +344,7 @@ app.post("/auth/register", async (req, res) => {
     }
 
     const { data: existingUser } = await supabase
-      .from("users").select("id").eq("email", email).single();
+      .from("users").select("id").eq("email", email).maybeSingle();
     if (existingUser) {
       return res.status(400).json({ error: "Email already registered" });
     }
@@ -223,7 +362,7 @@ app.post("/auth/register", async (req, res) => {
       .select().single();
     if (companyErr) return res.status(400).json({ error: companyErr.message });
 
-    const password_hash = await bcrypt.hash(password, 10);
+    const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const { data: user, error: userErr } = await supabase
       .from("users")
       .insert([{
@@ -258,44 +397,72 @@ app.post("/auth/register", async (req, res) => {
       { company_id: company.id, name: "thickness_multiplier_9inch", expression: "2.25",        description: "9 inch wall thickness multiplier",                    variables: [], output_unit: "multiplier", is_system_default: true, active: true },
     ]);
 
-    const token = jwt.sign(
-      { user_id: user.id, company_id: company.id, role: user.role, plan: company.plan },
-      process.env.JWT_SECRET, { expiresIn: "7d" }
-    );
-
     return res.status(201).json({
-      token,
+      token:         signAccessToken(user, company),
+      refresh_token: signRefreshToken(user, company),
       user:    { id: user.id, email: user.email, role: user.role, full_name: user.full_name, phone: user.phone },
       company: { id: company.id, name: company.name, slug: company.slug, plan: company.plan, max_projects: company.max_projects, max_users: company.max_users },
     });
   } catch (err) {
-    console.error("REGISTER ERROR:", err);
-    return res.status(500).json({ error: err.message || "Internal server error" });
+    req.log.error({ err }, "register failed");
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-app.post("/auth/login", async (req, res) => {
+app.post("/auth/login", authLimiter, async (req, res) => {
   const { email, password, company_slug } = req.body;
   try {
+    if (!email || !password || !company_slug) {
+      return res.status(400).json({ error: "Please fill all required fields" });
+    }
+    // Uniform 401 for every failure mode — never reveal whether the company,
+    // email, or password was the wrong one (prevents account/slug enumeration).
     const { data: company } = await supabase
-      .from("companies").select("id").eq("slug", company_slug).single();
-    if (!company) return res.status(404).json({ error: "Company not found" });
+      .from("companies").select("id, plan").eq("slug", company_slug).maybeSingle();
+    if (!company) return res.status(401).json({ error: "Invalid credentials" });
 
     const { data: user } = await supabase
       .from("users").select("*")
-      .eq("company_id", company.id).eq("email", email).single();
+      .eq("company_id", company.id).eq("email", email).maybeSingle();
     if (!user) return res.status(401).json({ error: "Invalid credentials" });
+    if (user.active === false) return res.status(403).json({ error: "Account is deactivated" });
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
 
-    const token = jwt.sign(
-      { user_id: user.id, company_id: company.id, role: user.role },
-      process.env.JWT_SECRET, { expiresIn: "7d" }
-    );
-    res.json({ token, user: { ...user, password_hash: undefined } });
+    res.json({
+      token:         signAccessToken(user, company),
+      refresh_token: signRefreshToken(user, company),
+      user: { ...user, password_hash: undefined },
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    req.log.error({ err }, "login failed");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Exchange a valid refresh token for a fresh access token. Re-checks that the
+// account still exists and is active, so a deactivated user loses access within
+// one access-token lifetime (default 1h).
+app.post("/auth/refresh", authLimiter, async (req, res) => {
+  const { refresh_token } = req.body;
+  if (!refresh_token) return res.status(400).json({ error: "Missing refresh token" });
+  try {
+    const payload = jwt.verify(refresh_token, REFRESH_SECRET);
+    if (payload.type !== "refresh") return res.status(401).json({ error: "Invalid token" });
+
+    const { data: user } = await supabase
+      .from("users").select("id, role, active, company_id")
+      .eq("id", payload.user_id).maybeSingle();
+    if (!user || user.active === false) return res.status(401).json({ error: "Account inactive" });
+
+    const { data: company } = await supabase
+      .from("companies").select("id, plan").eq("id", user.company_id).maybeSingle();
+    if (!company) return res.status(401).json({ error: "Company not found" });
+
+    res.json({ token: signAccessToken(user, company) });
+  } catch {
+    res.status(401).json({ error: "Invalid or expired refresh token" });
   }
 });
 
@@ -334,9 +501,11 @@ app.patch("/profile", authMiddleware, async (req, res) => {
 app.get("/projects", authMiddleware, async (req, res) => {
   const { company_id } = req.user;
   await withCompany(company_id);
+  const { from, to } = paginate(req);
   const { data, error } = await supabase
     .from("projects").select("*").eq("company_id", company_id)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .range(from, to);
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -374,6 +543,12 @@ app.post(
     const { company_id } = req.user;
     const { project_id } = req.params;
     try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+      // Verify the project belongs to the caller's company before writing to it.
+      if (!(await ownsProject(project_id, company_id))) {
+        fs.unlink(req.file.path, () => {});
+        return res.status(404).json({ error: "Project not found" });
+      }
       const filePath = path.resolve(req.file.path);
       const fileType = req.file.mimetype;
       await withCompany(company_id);
@@ -384,6 +559,20 @@ app.post(
         .select().single();
       if (planErr) return res.status(500).json({ error: planErr.message });
 
+      // ── Async path (OCR_ASYNC=true): enqueue and return 202 immediately so a
+      // slow EasyOCR run never holds the HTTP connection. The worker
+      // (workers/ocrWorker.js) processes it; the client polls /plan for status.
+      if (ocrQueue.isAsyncEnabled()) {
+        const jobId = await ocrQueue.enqueueOcr({
+          floor_plan_id: plan.id, file_path: filePath, company_id, project_id,
+        });
+        return res.status(202).json({
+          floor_plan_id: plan.id, ocr_status: "processing", job_id: jobId,
+          message: "Upload accepted; OCR is processing. Poll the plan endpoint for status.",
+        });
+      }
+
+      // ── Synchronous path (default) ──
       const ocrResult = await runOCR(filePath);
       await supabase.from("floor_plans")
         .update({ ocr_status: "done", raw_ocr_data: ocrResult })
@@ -582,7 +771,7 @@ app.post("/projects/:project_id/calculate", authMiddleware, async (req, res) => 
     const fMap = {};
     (formulas || []).forEach((f) => { fMap[f.name] = f.expression; });
 
-    const BRICK_FACE_SQFT     = parseFloat(eval(fMap["brick_face_area"] || "0.75 * 0.25"));
+    const BRICK_FACE_SQFT     = safeArith(fMap["brick_face_area"], 0.75 * 0.25);
     const BUFFER_PCT          = parseFloat(fMap["buffer_percentage"] || "5");
     const BRICKS_PER_M3       = parseFloat(fMap["bricks_per_m3"] || "500");  // BOQ master constant
     const redBrickThicknesses = (fMap["red_brick_thickness"] || "9").split(",").map(Number);
@@ -962,7 +1151,7 @@ app.post("/material-configs", authMiddleware, async (req, res) => {
   await withCompany(company_id);
   const { data, error } = await supabase
     .from("material_configs")
-    .insert([{ company_id, ...req.body }]).select().single();
+    .insert([{ ...sanitizeBody(req.body), company_id }]).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json(data);
 });
@@ -1040,10 +1229,14 @@ app.get("/projects/:project_id/estimations", authMiddleware, async (req, res) =>
 
 app.post("/projects/:project_id/estimations", authMiddleware, async (req, res) => {
   const { company_id } = req.user;
+  const { project_id } = req.params;
+  if (!(await ownsProject(project_id, company_id))) {
+    return res.status(404).json({ error: "Project not found" });
+  }
   await withCompany(company_id);
   const { data, error } = await supabase
     .from("material_estimations")
-    .insert([{ company_id, project_id: req.params.project_id, ...req.body }])
+    .insert([{ ...sanitizeBody(req.body), company_id, project_id }])
     .select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json(data);
@@ -1068,7 +1261,7 @@ app.patch("/settings", authMiddleware, async (req, res) => {
   await withCompany(company_id);
   const { data, error } = await supabase
     .from("company_settings")
-    .update({ ...req.body, updated_at: new Date() })
+    .update({ ...sanitizeBody(req.body), updated_at: new Date().toISOString() })
     .eq("company_id", company_id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
@@ -1098,6 +1291,16 @@ app.post("/team/invite", authMiddleware, async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required" });
   }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: "Please enter a valid email address" });
+  }
+  const pw = validatePassword(password);
+  if (!pw.ok) {
+    return res.status(400).json({ error: pw.message });
+  }
+  if (!["admin", "sub_user"].includes(role)) {
+    return res.status(400).json({ error: "Invalid role" });
+  }
   await withCompany(company_id);
   try {
     const { data: company } = await supabase
@@ -1117,7 +1320,7 @@ app.post("/team/invite", authMiddleware, async (req, res) => {
       return res.status(400).json({ error: "A user with this email already exists in your company" });
     }
 
-    const password_hash = await bcrypt.hash(password, 10);
+    const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const { data: user, error } = await supabase
       .from("users")
       .insert([{ company_id, email, password_hash, role, active: true, full_name: full_name || email.split("@")[0], phone }])
@@ -1194,10 +1397,12 @@ app.post("/master-rates/seed", authMiddleware, async (req, res) => {
 app.get("/master-rates", authMiddleware, async (req, res) => {
   const { company_id } = req.user;
   await withCompany(company_id);
+  const { from, to } = paginate(req);
   const { data, error } = await supabase
     .from("master_rates").select("*")
     .eq("company_id", company_id).eq("active", true)
-    .order("category").order("material");
+    .order("category").order("material")
+    .range(from, to);
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -1219,7 +1424,7 @@ app.post("/master-rates", authMiddleware, async (req, res) => {
   const { company_id } = req.user;
   await withCompany(company_id);
   const { data, error } = await supabase
-    .from("master_rates").insert([{ company_id, ...req.body }]).select().single();
+    .from("master_rates").insert([{ ...sanitizeBody(req.body), company_id }]).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json({ success: true, data });
 });
@@ -1945,8 +2150,57 @@ app.get("/projects/:project_id/export/excel", authMiddleware, async (req, res) =
 });
 
 // ═══════════════════════════════════════════════════════════
+// 404 + GLOBAL ERROR HANDLER
+// ═══════════════════════════════════════════════════════════
+
+// Unknown route → JSON 404 (not the default HTML page).
+app.use((req, res) => res.status(404).json({ error: "Not found" }));
+
+// Terminal error middleware: log full detail server-side, return a generic
+// message to the client (never leak stack traces / internal errors).
+// Multer errors (file too large / wrong type) map to 400.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  (req.log || logger).error({ err }, `unhandled error on ${req.method} ${req.path}`);
+  if (process.env.SENTRY_DSN) Sentry.captureException(err);
+  if (res.headersSent) return next(err);
+  const isMulter = err instanceof multer.MulterError || /Unsupported file type/.test(err.message || "");
+  res.status(isMulter ? 400 : 500).json({
+    error: isMulter ? err.message : "Internal server error",
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
 // START SERVER
 // ═══════════════════════════════════════════════════════════
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+// Only listen when run directly (`node server.js`); when required by tests the
+// app is exported without binding a port.
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  const server = app.listen(PORT, () => logger.info(`🚀 Server running on port ${PORT}`));
+
+  // ── Graceful shutdown ──────────────────────────────────────────────────────
+  // Stop accepting new connections, let in-flight requests finish, flush Sentry,
+  // then exit. Force-exit after 10s so a stuck connection can't hang the deploy.
+  let shuttingDown = false;
+  async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`${signal} received — shutting down gracefully`);
+    const forceTimer = setTimeout(() => {
+      logger.error("Forced shutdown after timeout");
+      process.exit(1);
+    }, 10_000);
+    forceTimer.unref();
+    server.close(async () => {
+      try { if (process.env.SENTRY_DSN) await Sentry.close(2000); } catch (_) {}
+      logger.info("Closed out remaining connections — exiting");
+      process.exit(0);
+    });
+  }
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+}
+
+module.exports = { app, safeArith, sanitizeBody, signAccessToken, signRefreshToken };

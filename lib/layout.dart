@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/api_service.dart';
 import 'services/project_store.dart';
+import 'services/ocr_store.dart';
 import 'utils/app_colors.dart';
 
 class AppLayout extends StatelessWidget {
@@ -179,7 +180,14 @@ class _Sidebar extends StatelessWidget {
             ),
             child: InkWell(
               onTap: () async {
+                // Clear ALL app state so the next user on this machine never
+                // sees the previous user's cached project/plan data.
                 await ApiService.logout();
+                OcrStore.instance.clear();
+                gCurrentProject.value = null;
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.remove('current_project_id');
+                await prefs.remove('current_project_name');
                 if (context.mounted) context.go('/login');
               },
               borderRadius: BorderRadius.circular(8),

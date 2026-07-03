@@ -1,6 +1,7 @@
 import 'package:archiquant_flutter/pages/register.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'layout.dart';
 import 'pages/dashboard.dart';
 import 'pages/master_list.dart';
@@ -13,35 +14,48 @@ import 'pages/login.dart';
 import 'pages/upload_plan.dart';
 import 'pages/ocr_result_page.dart';
 import 'services/api_service.dart';
+import 'services/project_store.dart';
+
+// Pass at build time with --dart-define=SENTRY_DSN=https://...  (empty = off).
+const _sentryDsn = String.fromEnvironment('SENTRY_DSN');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ── LOGIN PAGE BYPASS ────────────────────────────────────────────────
-  // The login screen is currently disabled as the entry point (see the
-  // commented `initialLocation: '/login'` below). Because every backend call
-  // needs a JWT, we silently auto-login with a shared demo account on startup.
-  // To RE-ENABLE login: restore `initialLocation: '/login'` and delete this block.
-  // Always (re)login so a stale/expired token can never leave the app stuck.
-  try {
-    await ApiService.login('adityaram@impacgo.com', 'demo1234', 'ipg');
-  } catch (_) {/* offline → keep any existing token */}
-  // ─────────────────────────────────────────────────────────────────────
+  // Restore any saved session into the in-memory cache so the route guard can
+  // decide synchronously whether to show the app or the login screen.
+  await ApiService.loadToken();
 
-  runApp(ArchiQuantApp());
+  if (_sentryDsn.isNotEmpty) {
+    await SentryFlutter.init(
+      (options) {
+        options.dsn = _sentryDsn;
+        options.tracesSampleRate = 0.1;
+      },
+      appRunner: () => runApp(ArchiQuantApp()),
+    );
+  } else {
+    runApp(ArchiQuantApp());
+  }
 }
 
 class ArchiQuantApp extends StatelessWidget {
   ArchiQuantApp({super.key});
 
   final _router = GoRouter(
-    // initialLocation: '/login',   // ← LOGIN PAGE COMMENTED OUT (bypassed)
-    initialLocation: '/',           // open straight to the dashboard
-    // Login disabled: any visit to /login (or /register) bounces to the app.
-    // To re-enable, delete this redirect and restore initialLocation: '/login'.
+    initialLocation: '/login',
+    // Re-run the redirect whenever the session expires (ApiService toggles
+    // gSessionExpired on an unrecoverable 401) so the user is bounced to /login.
+    refreshListenable: gSessionExpired,
+    // Auth guard: unauthenticated users can only reach /login and /register;
+    // everything else bounces to /login. Once logged in, the auth pages bounce
+    // back to the dashboard.
     redirect: (context, state) {
-      final loc = state.matchedLocation;
-      if (loc == '/login' || loc == '/register') return '/';
+      final loggedIn  = ApiService.isLoggedIn;
+      final loc       = state.matchedLocation;
+      final authRoute = loc == '/login' || loc == '/register';
+      if (!loggedIn && !authRoute) return '/login';
+      if (loggedIn && authRoute) return '/';
       return null;
     },
     routes: [
