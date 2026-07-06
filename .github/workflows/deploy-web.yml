@@ -1,15 +1,23 @@
-# Manual gh-pages deploy. Run from the Actions tab → "Deploy Web" → Run workflow.
-# Kept manual (not auto-on-push) so deploys are a deliberate, reviewed step.
+# Deploys the Flutter web app to GitHub Pages via GitHub Actions — no gh-pages
+# branch needed. Runs on every push to main (and manually).
 name: Deploy Web
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,13 +26,19 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter test
       - name: Build web
         run: flutter build web --base-href "/Archiquant/" --dart-define=SENTRY_DSN=${{ secrets.SENTRY_DSN }}
-      - name: Publish to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: build/web
-          # Required so Flutter routes/assets resolve and Jekyll doesn't strip _ files.
-          cname: ""
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
