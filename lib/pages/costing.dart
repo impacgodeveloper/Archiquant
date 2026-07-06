@@ -939,23 +939,15 @@ class _CostingState extends State<Costing>
   }
 
   Future<void> _loadCalculation() async {
-    setState(() { _loading = true; _error = null; });
+    if (mounted) setState(() { _loading = true; _error = null; });
     try {
-      final prefs     = await SharedPreferences.getInstance();
-      final projectId = prefs.getString('current_project_id') ?? '';
+      final projectId = gCurrentProject.value ??
+          (await SharedPreferences.getInstance()).getString('current_project_id') ?? '';
 
       if (projectId.isEmpty) {
+        if (!mounted) return;
         setState(() {
           _error   = 'No project selected.\nPlease create or select a project first.';
-          _loading = false;
-        });
-        return;
-      }
-
-      final token = await ApiService.getToken();
-      if (token == null) {
-        setState(() {
-          _error   = 'Session expired. Please login again.';
           _loading = false;
         });
         return;
@@ -971,6 +963,7 @@ class _CostingState extends State<Costing>
         },
       );
 
+      if (!mounted) return;
       if (result['success'] == true) {
         setState(() { _calcData = result; _loading = false; });
       } else {
@@ -980,7 +973,11 @@ class _CostingState extends State<Costing>
         });
       }
     } catch (e) {
-      setState(() { _error = 'Error: $e'; _loading = false; });
+      if (!mounted) return;
+      setState(() {
+        _error = e is ApiException ? e.message : 'Could not load costing. Please try again.';
+        _loading = false;
+      });
     }
   }
 

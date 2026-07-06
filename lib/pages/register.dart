@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
 import '../services/api_service.dart';
+import '../utils/validators.dart';
 
 // ─────────────────────────────────────────────────────────────
 //  PLAN MODEL
@@ -129,8 +130,13 @@ class _RegisterPageState extends State<RegisterPage> {
       setState(() => _error = 'Please fill in all required fields');
       return;
     }
-    if (_passwordCtrl.text.length < 6) {
-      setState(() => _error = 'Password must be at least 6 characters');
+    if (!isValidEmail(_emailCtrl.text)) {
+      setState(() => _error = 'Please enter a valid email address');
+      return;
+    }
+    final pwErr = passwordError(_passwordCtrl.text);
+    if (pwErr != null) {
+      setState(() => _error = pwErr);
       return;
     }
 
@@ -160,7 +166,7 @@ class _RegisterPageState extends State<RegisterPage> {
       }
     } catch (e) {
       setState(() {
-        _error     = 'Connection error. Is your server running?';
+        _error     = e is ApiException ? e.message : 'Connection error. Is your server running?';
         _isLoading = false;
       });
     }
@@ -170,19 +176,22 @@ class _RegisterPageState extends State<RegisterPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
-      body: Row(
-        children: [
-          _buildLeftPanel(),
-          Expanded(
-            flex: 3,
-            child: _step == 0
-                ? _buildPlanStep()
-                : _step == 1
-                    ? _buildDetailsStep()
-                    : _buildSuccessStep(),
-          ),
-        ],
-      ),
+      body: LayoutBuilder(builder: (context, c) {
+        final step = _step == 0
+            ? _buildPlanStep()
+            : _step == 1
+                ? _buildDetailsStep()
+                : _buildSuccessStep();
+        // Narrow screens (phones): show the form full-width; the step rail would
+        // squeeze the content to ~1 char wide (vertical text). Wide: two columns.
+        if (c.maxWidth < 768) return SafeArea(child: step);
+        return Row(
+          children: [
+            _buildLeftPanel(),
+            Expanded(flex: 3, child: step),
+          ],
+        );
+      }),
     );
   }
 

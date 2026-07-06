@@ -43,3 +43,20 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# ── Backend (Node) ──────────────────────────────────────────
+# Secrets — NEVER commit. Use .env on the server / .env.example in git.
+**/.env
+**/.env.*
+!**/.env.example
+# Dependencies & virtualenvs (reinstall with npm install / pip install)
+**/node_modules/
+backend/venv/
+**/__pycache__/
+# Uploaded plans / generated artifacts
+backend/uploads/
+*.pem
+*.key
+
+# Internal security assessments — keep out of the public repo
+/PRODUCTION_AUDIT_*.md

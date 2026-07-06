@@ -1,0 +1,10 @@
+# ArchiQuant backup cron — install with:  crontab scripts/crontab.example
+# (edit paths/secrets first; better: put secrets in /etc/archiquant.env and
+#  `source` it, rather than inlining them here).
+#
+# Nightly DB dump + verify at 02:00
+0 2 * * *  cd /opt/archiquant && set -a && . /etc/archiquant.env && set +a && ./scripts/backup_verify.sh  >> /var/log/archiquant-backup.log 2>&1
+# Nightly uploads archive at 02:30
+30 2 * * * cd /opt/archiquant && ./scripts/backup_uploads.sh >> /var/log/archiquant-uploads.log 2>&1
+# Weekly restore drill into a scratch DB (Sunday 03:00) — proves backups restore
+0 3 * * 0  cd /opt/archiquant && set -a && . /etc/archiquant-drill.env && set +a && ./scripts/restore_drill.sh >> /var/log/archiquant-drill.log 2>&1

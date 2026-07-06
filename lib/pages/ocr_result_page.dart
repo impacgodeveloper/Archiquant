@@ -1008,7 +1008,17 @@ class _OcrResultPageState extends State<OcrResultPage> {
           ),
         ],
       ),
-    );
+    ).whenComplete(() {
+      // Dispose the dialog's controllers once it closes — otherwise every open
+      // leaks 7 TextEditingControllers.
+      compCtrl.dispose();
+      lCtrl.dispose();
+      hCtrl.dispose();
+      wCtrl.dispose();
+      matCtrl.dispose();
+      typeCtrl.dispose();
+      nosCtrl.dispose();
+    });
   }
 
   Widget _field(String label, TextEditingController ctrl, {bool num = false}) {

@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 import '../services/api_service.dart';
 import '../services/project_store.dart';
 
@@ -36,10 +34,11 @@ class _ReviewBudgetState extends State<ReviewBudget> {
     if (mounted) setState(() { _loading = true; _error = null; });
     try {
       final prefs     = await SharedPreferences.getInstance();
-      final projectId = prefs.getString('current_project_id') ?? '';
+      final projectId = gCurrentProject.value ?? prefs.getString('current_project_id') ?? '';
       _projectName    = prefs.getString('current_project_name') ?? 'Project';
 
       if (projectId.isEmpty) {
+        if (!mounted) return;
         setState(() {
           _error   = 'No project selected.\nPlease select a project first.';
           _loading = false;
@@ -48,6 +47,7 @@ class _ReviewBudgetState extends State<ReviewBudget> {
       }
 
       final result = await ApiService.getReviewBudget(projectId);
+      if (!mounted) return;
       if (result['success'] == true) {
         setState(() { _data = result; _loading = false; });
       } else {
@@ -57,7 +57,11 @@ class _ReviewBudgetState extends State<ReviewBudget> {
         });
       }
     } catch (e) {
-      setState(() { _error = 'Error: $e'; _loading = false; });
+      if (!mounted) return;
+      setState(() {
+        _error = e is ApiException ? e.message : 'Could not load budget. Please try again.';
+        _loading = false;
+      });
     }
   }
 
@@ -78,9 +82,8 @@ class _ReviewBudgetState extends State<ReviewBudget> {
 
   // ── Export ──────────────────────────────────────────────
   void _showExportMenu() async {
-    final prefs     = await SharedPreferences.getInstance();
-    final projectId = prefs.getString('current_project_id') ?? '';
-    final token     = await ApiService.getToken() ?? '';
+    final projectId = gCurrentProject.value ??
+        (await SharedPreferences.getInstance()).getString('current_project_id') ?? '';
 
     if (projectId.isEmpty) return;
     if (!mounted) return;
@@ -114,8 +117,7 @@ class _ReviewBudgetState extends State<ReviewBudget> {
               sub:   'Full BOQ with rates and summary',
               onTap: () {
                 Navigator.pop(context);
-                _openUrl(
-                  '${ApiService.baseUrl}/projects/$projectId/export/pdf?token=$token');
+                _runExport(() => ApiService.exportPDF(projectId), 'PDF');
               },
             ),
             const SizedBox(height: 12),
@@ -126,8 +128,7 @@ class _ReviewBudgetState extends State<ReviewBudget> {
               sub:   '4 sheets: BOQ, Bricks, Cement/Sand, Rates',
               onTap: () {
                 Navigator.pop(context);
-                _openUrl(
-                  '${ApiService.baseUrl}/projects/$projectId/export/excel?token=$token');
+                _runExport(() => ApiService.exportExcel(projectId), 'Excel');
               },
             ),
             const SizedBox(height: 20),
@@ -137,18 +138,22 @@ class _ReviewBudgetState extends State<ReviewBudget> {
     );
   }
 
-  void _openUrl(String urlStr) {
+  // Runs an export via ApiService (token in header, downloaded as a blob) and
+  // surfaces success/failure instead of silently opening a blank tab.
+  Future<void> _runExport(Future<bool> Function() exporter, String label) async {
     try {
-      html.window.open(urlStr, '_blank');
+      final ok = await exporter();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok ? '$label downloaded' : '$label export failed'),
+        backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+      ));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: const Color(0xFFEF4444),
-          ),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$label export error'),
+        backgroundColor: const Color(0xFFEF4444),
+      ));
     }
   }
 
